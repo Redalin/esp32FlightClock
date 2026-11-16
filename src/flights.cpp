@@ -82,9 +82,15 @@ void recordFailure(HostBackoff& b, int httpCode, const char* host, unsigned long
   }
 }
 
-char cachedCallsign[16] = {0};
-char cachedOrigin[8] = {0};
-char cachedDest[8] = {0};
+struct RouteCacheEntry {
+  char callsign[16] = {0};
+  char origin[8] = {0};
+  char dest[8] = {0};
+};
+
+constexpr size_t kRouteCacheSize = 8;
+RouteCacheEntry routeCache[kRouteCacheSize];
+size_t routeCacheNext = 0;
 
 bool fetchRouteFromAdsbDb(const char* callsign,
                           char* originOut,
@@ -251,29 +257,34 @@ void fetchRoute(const char* callsign,
     return;
   }
 
-  if (strcmp(callsign, cachedCallsign) == 0) {
-    strlcpy(originOut, cachedOrigin, originSize);
-    strlcpy(destOut, cachedDest, destSize);
-    return;
+  for (size_t i = 0; i < kRouteCacheSize; ++i) {
+    if (strcmp(callsign, routeCache[i].callsign) == 0) {
+      strlcpy(originOut, routeCache[i].origin, originSize);
+      strlcpy(destOut, routeCache[i].dest, destSize);
+      return;
+    }
   }
 
-  strlcpy(cachedCallsign, callsign, sizeof(cachedCallsign));
-  cachedOrigin[0] = '\0';
-  cachedDest[0] = '\0';
+  RouteCacheEntry& slot = routeCache[routeCacheNext];
+  routeCacheNext = (routeCacheNext + 1) % kRouteCacheSize;
+  strlcpy(slot.callsign, callsign, sizeof(slot.callsign));
+  slot.origin[0] = '\0';
+  slot.dest[0] = '\0';
 
-  if (!fetchRouteFromAdsbDb(callsign, cachedOrigin, sizeof(cachedOrigin), cachedDest, sizeof(cachedDest))) {
-    fetchRouteFromAdsbLol(callsign, lat, lon, cachedOrigin, sizeof(cachedOrigin), cachedDest, sizeof(cachedDest));
+  if (!fetchRouteFromAdsbDb(callsign, slot.origin, sizeof(slot.origin), slot.dest, sizeof(slot.dest))) {
+    fetchRouteFromAdsbLol(callsign, lat, lon, slot.origin, sizeof(slot.origin), slot.dest, sizeof(slot.dest));
   }
 
-  strlcpy(originOut, cachedOrigin, originSize);
-  strlcpy(destOut, cachedDest, destSize);
+  strlcpy(originOut, slot.origin, originSize);
+  strlcpy(destOut, slot.dest, destSize);
 }
 
 bool fetchFromHost(const char* host,
                    double lat,
                    double lon,
                    float radiusNm,
-                   String& payloadOut,
+                   const JsonDocument& filter,
+                   JsonDocument& docOut,
                    int& httpCodeOut) {
   char url[192];
   snprintf(url,
@@ -288,6 +299,7 @@ bool fetchFromHost(const char* host,
   client.setInsecure();
 
   HTTPClient http;
+  http.useHTTP10(true); // Avoid chunked transfer encoding on getStream()
   http.setTimeout(10000);
   const bool isAdsbLol = (strcmp(host, "api.adsb.lol") == 0);
   http.setUserAgent(isAdsbLol ? "ESP32-FlightClock/1.0" : "curl/8.5.0");
@@ -314,8 +326,13 @@ bool fetchFromHost(const char* host,
     return false;
   }
 
-  payloadOut = http.getString();
+  DeserializationError err =
+      deserializeJson(docOut, http.getStream(), DeserializationOption::Filter(filter));
   http.end();
+  if (err) {
+    Serial.printf("[Flights] JSON error from %s: %s\n", host, err.c_str());
+    return false;
+  }
   return true;
 }
 
@@ -332,40 +349,6 @@ bool fetchClosest(const AppConfig& cfg, FlightInfo& out) {
   if (radiusNm < 1.0f) radiusNm = 1.0f;
   if (radiusNm > 150.0f) radiusNm = 150.0f;
 
-  bool primaryIsAdsbLol = (cfg.flightSource == "adsb.lol");
-  const char* primaryHost = primaryIsAdsbLol ? "api.adsb.lol" : "api.airplanes.live";
-  const char* fallbackHost = primaryIsAdsbLol ? "api.airplanes.live" : "api.adsb.lol";
-  HostBackoff& primaryBackoff = primaryIsAdsbLol ? adsbLolBackoff : airplanesBackoff;
-  HostBackoff& fallbackBackoff = primaryIsAdsbLol ? airplanesBackoff : adsbLolBackoff;
-
-  unsigned long now = millis();
-  String payload;
-  bool gotPayload = false;
-
-  if (!isCooldownActive(primaryBackoff, now)) {
-    int code = 0;
-    if (fetchFromHost(primaryHost, cfg.latitude, cfg.longitude, radiusNm, payload, code)) {
-      recordSuccess(primaryBackoff);
-      gotPayload = true;
-    } else {
-      recordFailure(primaryBackoff, code, primaryHost, now);
-    }
-  }
-
-  if (!gotPayload && !isCooldownActive(fallbackBackoff, now)) {
-    int code = 0;
-    if (fetchFromHost(fallbackHost, cfg.latitude, cfg.longitude, radiusNm, payload, code)) {
-      recordSuccess(fallbackBackoff);
-      gotPayload = true;
-    } else {
-      recordFailure(fallbackBackoff, code, fallbackHost, now);
-    }
-  }
-
-  if (!gotPayload) {
-    return false;
-  }
-
   JsonDocument filter;
   JsonObject acFilter = filter["ac"].add<JsonObject>();
   acFilter["flight"] = true;
@@ -377,14 +360,38 @@ bool fetchClosest(const AppConfig& cfg, FlightInfo& out) {
   acFilter["baro_rate"] = true;
   acFilter["lat"] = true;
   acFilter["lon"] = true;
-  acFilter["squawk"] = true;
 
+  bool primaryIsAdsbLol = (cfg.flightSource == "adsb.lol");
+  const char* primaryHost = primaryIsAdsbLol ? "api.adsb.lol" : "api.airplanes.live";
+  const char* fallbackHost = primaryIsAdsbLol ? "api.airplanes.live" : "api.adsb.lol";
+  HostBackoff& primaryBackoff = primaryIsAdsbLol ? adsbLolBackoff : airplanesBackoff;
+  HostBackoff& fallbackBackoff = primaryIsAdsbLol ? airplanesBackoff : adsbLolBackoff;
+
+  unsigned long now = millis();
   JsonDocument doc;
-  DeserializationError err =
-      deserializeJson(doc, payload, DeserializationOption::Filter(filter));
+  bool gotDoc = false;
 
-  if (err) {
-    Serial.printf("[Flights] JSON error: %s\n", err.c_str());
+  if (!isCooldownActive(primaryBackoff, now)) {
+    int code = 0;
+    if (fetchFromHost(primaryHost, cfg.latitude, cfg.longitude, radiusNm, filter, doc, code)) {
+      recordSuccess(primaryBackoff);
+      gotDoc = true;
+    } else {
+      recordFailure(primaryBackoff, code, primaryHost, now);
+    }
+  }
+
+  if (!gotDoc && !isCooldownActive(fallbackBackoff, now)) {
+    int code = 0;
+    if (fetchFromHost(fallbackHost, cfg.latitude, cfg.longitude, radiusNm, filter, doc, code)) {
+      recordSuccess(fallbackBackoff);
+      gotDoc = true;
+    } else {
+      recordFailure(fallbackBackoff, code, fallbackHost, now);
+    }
+  }
+
+  if (!gotDoc) {
     return false;
   }
 
