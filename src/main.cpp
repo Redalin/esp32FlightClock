@@ -28,20 +28,57 @@ void applyTimezone() {
   configTzTime(cfg.timezone.c_str(), "pool.ntp.org", "time.nist.gov");
 }
 
-bool connectWifiSta(uint32_t timeoutMs = 12000) {
+bool connectWifiSta(uint32_t timeoutMs = 15000) {
   if (cfg.wifiSsid.isEmpty()) {
+    Serial.println("[WiFi] No SSID configured.");
     return false;
   }
 
+  static bool eventRegistered = false;
+  if (!eventRegistered) {
+    eventRegistered = true;
+    WiFi.onEvent([](WiFiEvent_t event, WiFiEventInfo_t info) {
+      if (event == ARDUINO_EVENT_WIFI_STA_DISCONNECTED) {
+        Serial.printf("\n[WiFi] Disconnected reason=%d\n",
+                      info.wifi_sta_disconnected.reason);
+      }
+    });
+  }
+
+  Serial.printf("[WiFi] Joining \"%s\" (passLen=%u) ",
+                cfg.wifiSsid.c_str(),
+                static_cast<unsigned>(cfg.wifiPass.length()));
   Display::showBootScreen("Connecting Wi-Fi...");
+  WiFi.persistent(false);
   WiFi.mode(WIFI_STA);
+  WiFi.setTxPower(WIFI_POWER_11dBm); // Prevents RF brownout on ESP32-C3 Super Mini
   WiFi.begin(cfg.wifiSsid.c_str(), cfg.wifiPass.c_str());
 
   unsigned long start = millis();
   while (WiFi.status() != WL_CONNECTED && (millis() - start) < timeoutMs) {
-    delay(250);
+    delay(500);
+    Serial.print(".");
   }
-  return WiFi.status() == WL_CONNECTED;
+  Serial.println();
+
+  if (WiFi.status() == WL_CONNECTED) {
+    Serial.printf("[WiFi] Connected! IP: %s  RSSI: %d dBm\n",
+                  WiFi.localIP().toString().c_str(),
+                  WiFi.RSSI());
+    return true;
+  }
+
+  Serial.printf("[WiFi] Connection failed (status=%d). Scanning 2.4GHz...\n",
+                static_cast<int>(WiFi.status()));
+  int n = WiFi.scanNetworks();
+  for (int i = 0; i < n && i < 8; ++i) {
+    Serial.printf("  - \"%s\" ch=%d rssi=%d\n",
+                  WiFi.SSID(i).c_str(),
+                  WiFi.channel(i),
+                  WiFi.RSSI(i));
+  }
+  WiFi.scanDelete();
+  return false;
 }
 
 void startApPortal() {
@@ -49,6 +86,9 @@ void startApPortal() {
   WiFi.softAP(AP_SSID);
   netState.wifiConnected = false;
   netState.apMode = true;
+  Serial.printf("[WiFi] Started AP \"%s\" at http://%s\n",
+                AP_SSID,
+                WiFi.softAPIP().toString().c_str());
   Display::showPortalScreen(AP_SSID, WiFi.softAPIP().toString().c_str());
 }
 
@@ -56,13 +96,17 @@ void setupNetwork() {
   if (connectWifiSta()) {
     netState.wifiConnected = true;
     netState.apMode = false;
-    MDNS.begin(MDNS_HOSTNAME);
+    if (MDNS.begin(MDNS_HOSTNAME)) {
+      Serial.printf("[mDNS] http://%s.local\n", MDNS_HOSTNAME);
+    }
     applyTimezone();
+    Serial.printf("[NTP] Syncing time (TZ=%s)\n", cfg.timezone.c_str());
     Display::showBootScreen("Syncing time...");
   } else {
     startApPortal();
   }
   PortalServer::begin(cfg, weather, flight, netState);
+  Serial.println("[Web] Portal server listening on port 80");
 }
 
 void triggerTestFlight() {
@@ -89,8 +133,19 @@ void setup() {
   digitalWrite(LED_PIN, HIGH); // Active LOW LED off
 
   Serial.begin(115200);
+  delay(800); // Allow USB-CDC host to attach
+  Serial.println("\n=== ESP32-C3 Flight Clock ===");
+
   Storage::load(cfg);
+  Serial.printf("[Cfg] SSID=\"%s\" GPS=%s (%.4f, %.4f) TZ=%s\n",
+                cfg.wifiSsid.c_str(),
+                cfg.locationConfigured ? "yes" : "no",
+                cfg.latitude,
+                cfg.longitude,
+                cfg.timezone.c_str());
+
   Display::init(cfg.brightness);
+  Serial.println("[Display] GC9A01 initialized");
   Display::showBootScreen("Starting up...");
 
   setupNetwork();
@@ -137,6 +192,9 @@ void loop() {
       struct tm ti;
       if (getLocalTime(&ti, 5) && ti.tm_year > (2020 - 1900)) {
         netState.timeSynced = true;
+        char tBuf[24];
+        strftime(tBuf, sizeof(tBuf), "%Y-%m-%d %H:%M:%S", &ti);
+        Serial.printf("[NTP] Time synced: %s\n", tBuf);
       }
     }
   }
@@ -148,7 +206,14 @@ void loop() {
     if (!weatherFetchedOnce || (now - lastWeatherPollMs) >= WEATHER_POLL_INTERVAL_MS) {
       lastWeatherPollMs = now;
       weatherFetchedOnce = true;
-      Weather::fetch(cfg, weather);
+      if (Weather::fetch(cfg, weather)) {
+        Serial.printf("[Weather] %.1f C, %s (RH %d%%)\n",
+                      weather.tempC,
+                      Weather::describeCode(weather.weatherCode),
+                      weather.humidity);
+      } else {
+        Serial.println("[Weather] Fetch failed");
+      }
       lastRenderMs = 0;
     }
 
@@ -160,9 +225,15 @@ void loop() {
         if (latest.active) {
           flight = latest;
           digitalWrite(LED_PIN, LOW); // Indicate overhead plane
+          Serial.printf("[Flight] %s (%s) alt=%ldft dist=%.1fkm\n",
+                        flight.callsign,
+                        flight.aircraftType,
+                        static_cast<long>(flight.altitudeFt),
+                        flight.distanceKm);
         } else if (flight.active && (now - flight.lastSeenMs) >= FLIGHT_HOLD_MS) {
           flight.active = false;
           digitalWrite(LED_PIN, HIGH);
+          Serial.println("[Flight] Cleared, returning to clock");
         }
         lastRenderMs = 0;
       }
