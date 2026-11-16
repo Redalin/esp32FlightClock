@@ -2,9 +2,9 @@
 
 A compact round-screen widget for the **ESP32-C3 Super Mini** paired with a **1.28" 240×240 GC9A01 Round TFT** display.
 
-- **Time & Weather Watchface**: NTP-synced clock (12h/24h, POSIX timezone with automatic DST), seconds progress ring, custom vector weather icons, and live weather from **Open-Meteo** (no API key required).
-- **Overhead Flight Radar**: Automatically switches to a flight card whenever an aircraft enters your configured radius (via **airplanes.live** or **adsb.lol**, no API key required), showing callsign, aircraft type, registration, altitude with climb/descent indicator, ground speed, distance, heading, and a bearing dot around the circular rim.
-- **Web Configuration Portal**: Captive portal on first boot (`ESP32-FlightClock`) and always-on web UI in STA mode (`http://flightclock.local` or device IP) to configure Wi-Fi, GPS coordinates, timezone, units, brightness, and radar radius/polling.
+- **Time & Weather Watchface**: NTP-synced clock (12h/24h, POSIX timezone with automatic DST), 60-tick precision dial, custom vector weather icons, and live weather from **Open-Meteo** (no API key required).
+- **Overhead Flight Radar**: Automatically switches to a flight HUD whenever an aircraft enters your configured radius (default 5 km), using **airplanes.live** / **adsb.lol** with automatic fallback and `429`/`403` backoff. Shows callsign, rotated aircraft icon, type, registration, altitude with climb/descent indicator, ground speed, distance, route, and a bearing blip on the outer radar ring. Polls at your configured interval when idle (default 30s), speeds up to 5s while tracking an aircraft, and supports configurable **quiet hours** (default 1:00 AM–6:00 AM) to conserve API quota.
+- **Web Configuration Portal**: Captive portal on first boot (`ESP32-FlightClock`) and always-on web UI in STA mode (`http://flightclock.local` or device IP) to configure Wi-Fi, GPS coordinates, timezone, units, brightness, radar radius/polling, and quiet hours.
 
 ---
 
@@ -28,12 +28,13 @@ Pin mappings are configured in [include/config.h](include/config.h) using **Lovy
 ## Build & Upload (PlatformIO)
 
 1. Install [PlatformIO](https://platformio.org/) (VS Code extension or `pio` CLI).
-2. Connect your ESP32-C3 Super Mini via USB-C.
-3. Build and flash:
+2. *(Optional)* Create a `.env` file in the project root to pre-populate defaults at compile time (`WIFI_SSID`, `WIFI_PASS`, `TIMEZONE`, `LATITUDE`, `LONGITUDE`, `ADSB_LOL_API_KEY`).
+3. Connect your ESP32-C3 Super Mini via USB-C.
+4. Build and flash:
    ```bash
    pio run -t upload
    ```
-4. (Optional) Open serial monitor:
+5. (Optional) Open serial monitor:
    ```bash
    pio device monitor -b 115200
    ```
