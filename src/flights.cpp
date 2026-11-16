@@ -157,6 +157,11 @@ bool fetchClosest(const AppConfig& cfg, FlightInfo& out) {
     return false;
   }
   http.addHeader("Accept", "application/json");
+#ifdef ADSB_LOL_API_KEY
+  if (cfg.flightSource != "airplanes.live" && ADSB_LOL_API_KEY[0] != '\0') {
+    http.addHeader("x-api-key", ADSB_LOL_API_KEY);
+  }
+#endif
 
   int httpCode = http.GET();
   if (httpCode != HTTP_CODE_OK) {

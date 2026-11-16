@@ -32,6 +32,7 @@ string_keys = {
     "WIFI_SSID": "DEFAULT_WIFI_SSID",
     "WIFI_PASS": "DEFAULT_WIFI_PASS",
     "TIMEZONE": "DEFAULT_TIMEZONE",
+    "ADSB_LOL_API_KEY": "ADSB_LOL_API_KEY",
 }
 
 for src_key, macro_name in string_keys.items():

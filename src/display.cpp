@@ -100,45 +100,80 @@ void polarToXY(int cx, int cy, float r, float deg, int& x, int& y) {
   y = cy - static_cast<int>(roundf(r * cosf(rad)));
 }
 
+enum class ScreenMode : uint8_t {
+  NONE = 0,
+  BOOT,
+  PORTAL,
+  CLOCK,
+  FLIGHT
+};
+
+ScreenMode activeScreen = ScreenMode::NONE;
+
 void drawThickArc(int cx, int cy, float r, float startDeg, float endDeg,
                   uint16_t color, int thickness) {
   if (endDeg <= startDeg) return;
-  int radius = thickness / 2;
-  for (float a = startDeg; a <= endDeg; a += 0.6f) {
-    int x, y;
-    polarToXY(cx, cy, r, a, x, y);
-    if (radius <= 0) {
-      spr.drawPixel(x, y, color);
-    } else {
-      spr.fillCircle(x, y, radius, color);
-    }
-  }
+  int rIn = static_cast<int>(r) - thickness / 2;
+  int rOut = rIn + thickness - 1;
+  if (rIn < 0) rIn = 0;
+  // LovyanGFX fillArc uses 0 deg = 3 o'clock, clockwise; our convention is 0 deg = 12 o'clock.
+  spr.fillArc(cx, cy, rOut, rIn, startDeg + 270.0f, endDeg + 270.0f, color);
 }
 
 void drawDialTicks(int cx, int cy, float innerR, float outerR,
                    uint16_t majorCol, uint16_t minorCol) {
-  for (int i = 0; i < 60; ++i) {
-    float deg = i * 6.0f;
-    bool isCardinal = (i % 15 == 0);
-    bool isHour = (i % 5 == 0);
-    if (!isHour && (i % 5 != 0)) {
-      // Subtle minute dot
-      int mx, my;
-      polarToXY(cx, cy, outerR - 1.0f, deg, mx, my);
-      spr.drawPixel(mx, my, minorCol);
-      continue;
+  struct TickCoord {
+    int16_t x1, y1, x2, y2;
+    int16_t x1b, y1b, x2b, y2b;
+    uint8_t kind; // 0 = minute dot, 1 = hour tick, 2 = cardinal tick
+  };
+  static TickCoord ticks[60];
+  static bool ticksReady = false;
+
+  if (!ticksReady) {
+    for (int i = 0; i < 60; ++i) {
+      float deg = i * 6.0f;
+      bool isCardinal = (i % 15 == 0);
+      bool isHour = (i % 5 == 0);
+      if (!isHour) {
+        int mx, my;
+        polarToXY(cx, cy, outerR - 1.0f, deg, mx, my);
+        ticks[i].x1 = static_cast<int16_t>(mx);
+        ticks[i].y1 = static_cast<int16_t>(my);
+        ticks[i].kind = 0;
+        continue;
+      }
+      float r1 = isCardinal ? (innerR - 3.0f) : innerR;
+      int x1, y1, x2, y2;
+      polarToXY(cx, cy, r1, deg, x1, y1);
+      polarToXY(cx, cy, outerR, deg, x2, y2);
+      ticks[i].x1 = static_cast<int16_t>(x1);
+      ticks[i].y1 = static_cast<int16_t>(y1);
+      ticks[i].x2 = static_cast<int16_t>(x2);
+      ticks[i].y2 = static_cast<int16_t>(y2);
+      ticks[i].kind = isCardinal ? 2 : 1;
+      if (isCardinal) {
+        int x1b, y1b, x2b, y2b;
+        polarToXY(cx, cy, r1, deg + 0.6f, x1b, y1b);
+        polarToXY(cx, cy, outerR, deg + 0.6f, x2b, y2b);
+        ticks[i].x1b = static_cast<int16_t>(x1b);
+        ticks[i].y1b = static_cast<int16_t>(y1b);
+        ticks[i].x2b = static_cast<int16_t>(x2b);
+        ticks[i].y2b = static_cast<int16_t>(y2b);
+      }
     }
-    float r1 = isCardinal ? (innerR - 3.0f) : innerR;
-    int x1, y1, x2, y2;
-    polarToXY(cx, cy, r1, deg, x1, y1);
-    polarToXY(cx, cy, outerR, deg, x2, y2);
-    spr.drawLine(x1, y1, x2, y2, isCardinal ? majorCol : minorCol);
-    if (isCardinal) {
-      // Slightly bolder cardinal tick
-      int x1b, y1b, x2b, y2b;
-      polarToXY(cx, cy, r1, deg + 0.6f, x1b, y1b);
-      polarToXY(cx, cy, outerR, deg + 0.6f, x2b, y2b);
-      spr.drawLine(x1b, y1b, x2b, y2b, majorCol);
+    ticksReady = true;
+  }
+
+  for (int i = 0; i < 60; ++i) {
+    const TickCoord& t = ticks[i];
+    if (t.kind == 0) {
+      spr.drawPixel(t.x1, t.y1, minorCol);
+    } else if (t.kind == 1) {
+      spr.drawLine(t.x1, t.y1, t.x2, t.y2, minorCol);
+    } else {
+      spr.drawLine(t.x1, t.y1, t.x2, t.y2, majorCol);
+      spr.drawLine(t.x1b, t.y1b, t.x2b, t.y2b, majorCol);
     }
   }
 }
@@ -333,6 +368,7 @@ void setBrightness(uint8_t brightness) {
 }
 
 void showBootScreen(const char* statusLine) {
+  activeScreen = ScreenMode::BOOT;
   if (!spriteReady) {
     tft.fillScreen(COL_BG);
     tft.setTextColor(COL_CYAN, COL_BG);
@@ -366,6 +402,7 @@ void showBootScreen(const char* statusLine) {
 
 void showPortalScreen(const char* apSsid, const char* apIp) {
   if (!spriteReady) return;
+  activeScreen = ScreenMode::PORTAL;
 
   spr.fillSprite(COL_BG);
   spr.drawCircle(kCx, kCy, 115, COL_AMBER);
@@ -402,25 +439,57 @@ void renderClockWeather(const AppConfig& cfg,
                         const char* ipStr) {
   if (!spriteReady) return;
 
+  struct tm timeinfo = {};
+  bool hasTime = timeSynced && getLocalTime(&timeinfo, 10);
+
+  static int lastMin = -1;
+  static int lastHour = -1;
+  static int lastMday = -1;
+  static bool lastHasTime = false;
+  static bool lastWifiOk = false;
+  static bool lastLocConfigured = false;
+  static bool lastUse24h = true;
+  static bool lastUseF = false;
+  static bool lastWeatherValid = false;
+  static unsigned long lastWeatherUpdatedMs = 0;
+
+  bool staticStateSame = (activeScreen == ScreenMode::CLOCK) &&
+                         (hasTime == lastHasTime) &&
+                         (wifiOk == lastWifiOk) &&
+                         (cfg.locationConfigured == lastLocConfigured) &&
+                         (cfg.use24Hour == lastUse24h) &&
+                         (cfg.useFahrenheit == lastUseF) &&
+                         (weather.valid == lastWeatherValid) &&
+                         (weather.updatedAtMs == lastWeatherUpdatedMs);
+
+  if (staticStateSame &&
+      (!hasTime || (timeinfo.tm_min == lastMin &&
+                    timeinfo.tm_hour == lastHour &&
+                    timeinfo.tm_mday == lastMday))) {
+    return;
+  }
+
+  activeScreen = ScreenMode::CLOCK;
+  lastHasTime = hasTime;
+  lastWifiOk = wifiOk;
+  lastLocConfigured = cfg.locationConfigured;
+  lastUse24h = cfg.use24Hour;
+  lastUseF = cfg.useFahrenheit;
+  lastWeatherValid = weather.valid;
+  lastWeatherUpdatedMs = weather.updatedAtMs;
+  if (hasTime) {
+    lastMin = timeinfo.tm_min;
+    lastHour = timeinfo.tm_hour;
+    lastMday = timeinfo.tm_mday;
+  }
+
   spr.fillSprite(COL_BG);
 
   // Outer precision bezel & ticks
   spr.drawCircle(kCx, kCy, 116, COL_RING_DIM);
   drawDialTicks(kCx, kCy, 110.0f, 117.0f, COL_TEAL, COL_RING_DIM);
 
-  struct tm timeinfo;
-  bool hasTime = timeSynced && getLocalTime(&timeinfo, 10);
-
   if (hasTime) {
-    // Seconds progress arc with glowing tip
-    float secAngle = timeinfo.tm_sec * 6.0f;
-    if (secAngle > 0.0f) {
-      drawThickArc(kCx, kCy, 115.0f, 0.0f, secAngle, COL_CYAN, 3);
-      int tx, ty;
-      polarToXY(kCx, kCy, 115.0f, secAngle, tx, ty);
-      spr.fillCircle(tx, ty, 3, COL_WHITE);
-    }
-
     // Top date pill
     char dateBuf[24];
     strftime(dateBuf, sizeof(dateBuf), "%a %d %b", &timeinfo);
@@ -499,6 +568,36 @@ void renderClockWeather(const AppConfig& cfg,
 
 void renderFlightScreen(const AppConfig& cfg, const FlightInfo& flight) {
   if (!spriteReady) return;
+
+  static unsigned long lastSeenMs = 0;
+  static int32_t lastAltFt = 0;
+  static int32_t lastDistTenths = -1;
+  static int32_t lastBearingDeg = -1;
+  static int lastTotalInRange = -1;
+  static bool lastImperial = false;
+  static char lastCallsign[16] = {0};
+
+  int32_t distTenths = static_cast<int32_t>(roundf(flight.distanceKm * 10.0f));
+  int32_t bearingInt = static_cast<int32_t>(roundf(flight.bearingDeg));
+  if (activeScreen == ScreenMode::FLIGHT &&
+      lastSeenMs == flight.lastSeenMs &&
+      lastAltFt == flight.altitudeFt &&
+      lastDistTenths == distTenths &&
+      lastBearingDeg == bearingInt &&
+      lastTotalInRange == flight.totalInRange &&
+      lastImperial == cfg.useImperialDist &&
+      strncmp(lastCallsign, flight.callsign, sizeof(lastCallsign)) == 0) {
+    return;
+  }
+
+  activeScreen = ScreenMode::FLIGHT;
+  lastSeenMs = flight.lastSeenMs;
+  lastAltFt = flight.altitudeFt;
+  lastDistTenths = distTenths;
+  lastBearingDeg = bearingInt;
+  lastTotalInRange = flight.totalInRange;
+  lastImperial = cfg.useImperialDist;
+  strlcpy(lastCallsign, flight.callsign, sizeof(lastCallsign));
 
   spr.fillSprite(COL_BG);
 

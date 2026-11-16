@@ -22,6 +22,7 @@
 
 // Polling intervals
 #define WEATHER_POLL_INTERVAL_MS (10UL * 60UL * 1000UL) // 10 minutes
+#define FLIGHT_ACTIVE_POLL_MS    (5UL * 1000UL)        // Poll every 5s while tracking a flight
 #define FLIGHT_HOLD_MS           (15UL * 1000UL)       // Keep flight screen 15s after last seen
 
 struct AppConfig {
@@ -43,7 +44,7 @@ struct AppConfig {
 
   // Flight Radar
   float searchRadiusKm = 5.0f;
-  uint16_t flightPollSec = 10;
+  uint16_t flightPollSec = 30;
   int32_t maxAltitudeFt = 5000;
   String flightSource = "adsb.lol"; // "adsb.lol" or "airplanes.live"
 };

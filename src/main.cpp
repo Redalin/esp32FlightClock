@@ -200,6 +200,7 @@ void loop() {
       struct tm ti;
       if (getLocalTime(&ti, 5) && ti.tm_year > (2020 - 1900)) {
         netState.timeSynced = true;
+        lastRenderMs = 0;
         char tBuf[24];
         strftime(tBuf, sizeof(tBuf), "%Y-%m-%d %H:%M:%S", &ti);
         Serial.printf("[NTP] Time synced: %s\n", tBuf);
@@ -208,6 +209,19 @@ void loop() {
   }
 
   unsigned long now = millis();
+
+  // Render screen every 1s (or immediately when invalidated) before blocking network polls
+  if (!netState.apMode && (lastRenderMs == 0 || (now - lastRenderMs) >= 1000UL)) {
+    lastRenderMs = now;
+    if (testFlightUntilMs > now) {
+      Display::renderFlightScreen(cfg, testFlight);
+    } else if (flight.active) {
+      Display::renderFlightScreen(cfg, flight);
+    } else {
+      String ip = netState.wifiConnected ? WiFi.localIP().toString() : "";
+      Display::renderClockWeather(cfg, weather, netState.wifiConnected, netState.timeSynced, ip.c_str());
+    }
+  }
 
   // Poll Weather & Flights only when connected and GPS is configured
   if (netState.wifiConnected && cfg.locationConfigured) {
@@ -225,7 +239,9 @@ void loop() {
       lastRenderMs = 0;
     }
 
-    unsigned long flightIntervalMs = static_cast<unsigned long>(cfg.flightPollSec) * 1000UL;
+    unsigned long flightIntervalMs = flight.active
+                                         ? FLIGHT_ACTIVE_POLL_MS
+                                         : (static_cast<unsigned long>(cfg.flightPollSec) * 1000UL);
     if (lastFlightPollMs == 0 || (now - lastFlightPollMs) >= flightIntervalMs) {
       lastFlightPollMs = now;
       FlightInfo latest;
@@ -247,19 +263,6 @@ void loop() {
         }
         lastRenderMs = 0;
       }
-    }
-  }
-
-  // Render screen every 1s (or immediately when invalidated)
-  if (!netState.apMode && (lastRenderMs == 0 || (now - lastRenderMs) >= 1000UL)) {
-    lastRenderMs = now;
-    if (testFlightUntilMs > now) {
-      Display::renderFlightScreen(cfg, testFlight);
-    } else if (flight.active) {
-      Display::renderFlightScreen(cfg, flight);
-    } else {
-      String ip = netState.wifiConnected ? WiFi.localIP().toString() : "";
-      Display::renderClockWeather(cfg, weather, netState.wifiConnected, netState.timeSynced, ip.c_str());
     }
   }
 
