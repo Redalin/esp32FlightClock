@@ -45,81 +45,6 @@ void copyTrimmed(char* dst, size_t dstSize, const char* src) {
   }
 }
 
-char cachedCallsign[16] = {0};
-char cachedOrigin[8] = {0};
-char cachedDest[8] = {0};
-
-void fetchRoute(const char* callsign,
-                char* originOut,
-                size_t originSize,
-                char* destOut,
-                size_t destSize) {
-  originOut[0] = '\0';
-  destOut[0] = '\0';
-
-  if (!callsign || callsign[0] == '\0' || strcmp(callsign, "UNKNOWN") == 0) {
-    return;
-  }
-
-  if (strcmp(callsign, cachedCallsign) == 0) {
-    strlcpy(originOut, cachedOrigin, originSize);
-    strlcpy(destOut, cachedDest, destSize);
-    return;
-  }
-
-  strlcpy(cachedCallsign, callsign, sizeof(cachedCallsign));
-  cachedOrigin[0] = '\0';
-  cachedDest[0] = '\0';
-
-  char url[96];
-  snprintf(url, sizeof(url), "https://api.adsbdb.com/v0/callsign/%s", callsign);
-
-  WiFiClientSecure client;
-  client.setInsecure();
-
-  HTTPClient http;
-  http.setTimeout(5000);
-  http.setUserAgent("ESP32-FlightClock/1.0");
-  if (!http.begin(client, url)) {
-    return;
-  }
-
-  int httpCode = http.GET();
-  if (httpCode != HTTP_CODE_OK) {
-    http.end();
-    return;
-  }
-
-  String payload = http.getString();
-  http.end();
-
-  JsonDocument filter;
-  filter["response"]["flightroute"]["origin"]["iata_code"] = true;
-  filter["response"]["flightroute"]["origin"]["icao_code"] = true;
-  filter["response"]["flightroute"]["destination"]["iata_code"] = true;
-  filter["response"]["flightroute"]["destination"]["icao_code"] = true;
-
-  JsonDocument doc;
-  if (deserializeJson(doc, payload, DeserializationOption::Filter(filter))) {
-    return;
-  }
-
-  JsonObject route = doc["response"]["flightroute"];
-  if (route.isNull()) {
-    return;
-  }
-
-  const char* orig = route["origin"]["iata_code"] | "";
-  if (orig[0] == '\0') orig = route["origin"]["icao_code"] | "";
-  const char* dest = route["destination"]["iata_code"] | "";
-  if (dest[0] == '\0') dest = route["destination"]["icao_code"] | "";
-
-  strlcpy(cachedOrigin, orig, sizeof(cachedOrigin));
-  strlcpy(cachedDest, dest, sizeof(cachedDest));
-  strlcpy(originOut, cachedOrigin, originSize);
-  strlcpy(destOut, cachedDest, destSize);
-}
-
 struct HostBackoff {
   unsigned long cooldownUntilMs = 0;
   uint8_t streak = 0;
@@ -155,6 +80,193 @@ void recordFailure(HostBackoff& b, int httpCode, const char* host, unsigned long
                   httpCode,
                   backoffMs / 1000UL);
   }
+}
+
+char cachedCallsign[16] = {0};
+char cachedOrigin[8] = {0};
+char cachedDest[8] = {0};
+
+bool fetchRouteFromAdsbDb(const char* callsign,
+                          char* originOut,
+                          size_t originSize,
+                          char* destOut,
+                          size_t destSize) {
+  char url[96];
+  snprintf(url, sizeof(url), "https://api.adsbdb.com/v0/callsign/%s", callsign);
+
+  WiFiClientSecure client;
+  client.setInsecure();
+
+  HTTPClient http;
+  http.setTimeout(5000);
+  http.setUserAgent("ESP32-FlightClock/1.0");
+  if (!http.begin(client, url)) {
+    return false;
+  }
+
+  int httpCode = http.GET();
+  if (httpCode != HTTP_CODE_OK) {
+    http.end();
+    return false;
+  }
+
+  String payload = http.getString();
+  http.end();
+
+  JsonDocument filter;
+  filter["response"]["flightroute"]["origin"]["iata_code"] = true;
+  filter["response"]["flightroute"]["origin"]["icao_code"] = true;
+  filter["response"]["flightroute"]["destination"]["iata_code"] = true;
+  filter["response"]["flightroute"]["destination"]["icao_code"] = true;
+
+  JsonDocument doc;
+  if (deserializeJson(doc, payload, DeserializationOption::Filter(filter))) {
+    return false;
+  }
+
+  JsonObject route = doc["response"]["flightroute"];
+  if (route.isNull()) {
+    return false;
+  }
+
+  const char* orig = route["origin"]["iata_code"] | "";
+  if (orig[0] == '\0') orig = route["origin"]["icao_code"] | "";
+  const char* dest = route["destination"]["iata_code"] | "";
+  if (dest[0] == '\0') dest = route["destination"]["icao_code"] | "";
+  if (orig[0] == '\0' || dest[0] == '\0') {
+    return false;
+  }
+
+  strlcpy(originOut, orig, originSize);
+  strlcpy(destOut, dest, destSize);
+  return true;
+}
+
+bool fetchRouteFromAdsbLol(const char* callsign,
+                           double lat,
+                           double lon,
+                           char* originOut,
+                           size_t originSize,
+                           char* destOut,
+                           size_t destSize) {
+  unsigned long now = millis();
+  if (isCooldownActive(adsbLolBackoff, now)) {
+    return false;
+  }
+
+  WiFiClientSecure client;
+  client.setInsecure();
+
+  HTTPClient http;
+  http.setTimeout(5000);
+  http.setUserAgent("ESP32-FlightClock/1.0");
+  if (!http.begin(client, "https://api.adsb.lol/api/0/routeset")) {
+    return false;
+  }
+  http.addHeader("Content-Type", "application/json");
+  http.addHeader("Accept", "application/json");
+#ifdef ADSB_LOL_API_KEY
+  if (ADSB_LOL_API_KEY[0] != '\0') {
+    http.addHeader("x-api-key", ADSB_LOL_API_KEY);
+  }
+#endif
+
+  char body[128];
+  snprintf(body,
+           sizeof(body),
+           "{\"planes\":[{\"callsign\":\"%s\",\"lat\":%.4f,\"lng\":%.4f}]}",
+           callsign,
+           lat,
+           lon);
+
+  int httpCode = http.POST(reinterpret_cast<uint8_t*>(body), strlen(body));
+  if (httpCode != HTTP_CODE_OK) {
+    http.end();
+    recordFailure(adsbLolBackoff, httpCode, "api.adsb.lol", now);
+    return false;
+  }
+  recordSuccess(adsbLolBackoff);
+
+  String payload = http.getString();
+  http.end();
+
+  JsonDocument filter;
+  filter[0]["airport_codes"] = true;
+  filter[0]["_airports"][0]["iata"] = true;
+  filter[0]["_airports"][0]["icao"] = true;
+
+  JsonDocument doc;
+  if (deserializeJson(doc, payload, DeserializationOption::Filter(filter))) {
+    return false;
+  }
+
+  JsonObject entry = doc[0];
+  if (entry.isNull()) {
+    return false;
+  }
+
+  const char* orig = "";
+  const char* dest = "";
+  JsonArray airports = entry["_airports"].as<JsonArray>();
+  if (!airports.isNull() && airports.size() >= 2) {
+    JsonObject first = airports[0];
+    JsonObject last = airports[airports.size() - 1];
+    orig = first["iata"] | "";
+    if (orig[0] == '\0') orig = first["icao"] | "";
+    dest = last["iata"] | "";
+    if (dest[0] == '\0') dest = last["icao"] | "";
+  }
+
+  if (orig[0] != '\0' && dest[0] != '\0') {
+    strlcpy(originOut, orig, originSize);
+    strlcpy(destOut, dest, destSize);
+    return true;
+  }
+
+  const char* codes = entry["airport_codes"] | "";
+  const char* dash = strchr(codes, '-');
+  if (dash && dash != codes && dash[1] != '\0') {
+    size_t origLen = static_cast<size_t>(dash - codes);
+    if (origLen >= originSize) origLen = originSize - 1;
+    memcpy(originOut, codes, origLen);
+    originOut[origLen] = '\0';
+    strlcpy(destOut, dash + 1, destSize);
+    return (originOut[0] != '\0' && destOut[0] != '\0');
+  }
+
+  return false;
+}
+
+void fetchRoute(const char* callsign,
+                double lat,
+                double lon,
+                char* originOut,
+                size_t originSize,
+                char* destOut,
+                size_t destSize) {
+  originOut[0] = '\0';
+  destOut[0] = '\0';
+
+  if (!callsign || callsign[0] == '\0' || strcmp(callsign, "UNKNOWN") == 0) {
+    return;
+  }
+
+  if (strcmp(callsign, cachedCallsign) == 0) {
+    strlcpy(originOut, cachedOrigin, originSize);
+    strlcpy(destOut, cachedDest, destSize);
+    return;
+  }
+
+  strlcpy(cachedCallsign, callsign, sizeof(cachedCallsign));
+  cachedOrigin[0] = '\0';
+  cachedDest[0] = '\0';
+
+  if (!fetchRouteFromAdsbDb(callsign, cachedOrigin, sizeof(cachedOrigin), cachedDest, sizeof(cachedDest))) {
+    fetchRouteFromAdsbLol(callsign, lat, lon, cachedOrigin, sizeof(cachedOrigin), cachedDest, sizeof(cachedDest));
+  }
+
+  strlcpy(originOut, cachedOrigin, originSize);
+  strlcpy(destOut, cachedDest, destSize);
 }
 
 bool fetchFromHost(const char* host,
@@ -287,6 +399,9 @@ bool fetchClosest(const AppConfig& cfg, FlightInfo& out) {
   int countInRange = 0;
   FlightInfo best;
 
+  double bestLat = 0.0;
+  double bestLon = 0.0;
+
   for (JsonObject plane : ac) {
     if (!plane["lat"].is<double>() || !plane["lon"].is<double>()) {
       continue;
@@ -324,11 +439,15 @@ bool fetchClosest(const AppConfig& cfg, FlightInfo& out) {
       best.distanceKm = distKm;
       best.bearingDeg = initialBearingDeg(cfg.latitude, cfg.longitude, pLat, pLon);
       best.lastSeenMs = millis();
+      bestLat = pLat;
+      bestLon = pLon;
     }
   }
 
   if (countInRange > 0) {
     fetchRoute(best.callsign,
+               bestLat,
+               bestLon,
                best.origin,
                sizeof(best.origin),
                best.destination,
