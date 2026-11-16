@@ -46,7 +46,7 @@ struct AppConfig {
   float searchRadiusKm = 5.0f;
   uint16_t flightPollSec = 30;
   int32_t maxAltitudeFt = 5000;
-  String flightSource = "adsb.lol"; // "adsb.lol" or "airplanes.live"
+  String flightSource = "airplanes.live"; // "airplanes.live" or "adsb.lol"
   bool quietHoursEnabled = true;
   uint8_t quietStartHour = 1;       // 0..23 (local time)
   uint8_t quietEndHour = 6;         // 0..23 (local time)

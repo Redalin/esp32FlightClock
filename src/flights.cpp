@@ -120,6 +120,93 @@ void fetchRoute(const char* callsign,
   strlcpy(destOut, cachedDest, destSize);
 }
 
+struct HostBackoff {
+  unsigned long cooldownUntilMs = 0;
+  uint8_t streak = 0;
+};
+
+HostBackoff airplanesBackoff;
+HostBackoff adsbLolBackoff;
+
+bool isCooldownActive(const HostBackoff& b, unsigned long now) {
+  return b.cooldownUntilMs != 0 && static_cast<long>(now - b.cooldownUntilMs) < 0;
+}
+
+void recordSuccess(HostBackoff& b) {
+  b.cooldownUntilMs = 0;
+  b.streak = 0;
+}
+
+void recordFailure(HostBackoff& b, int httpCode, const char* host, unsigned long now) {
+  unsigned long backoffMs = 0;
+  if (httpCode == 429) {
+    uint8_t shift = (b.streak < 4) ? b.streak : 4;
+    backoffMs = 60000UL << shift; // 60s, 120s, 240s, 480s, 960s
+    if (backoffMs > 900000UL) backoffMs = 900000UL;
+    if (b.streak < 10) ++b.streak;
+  } else if (httpCode == 403) {
+    backoffMs = (b.streak == 0) ? 300000UL : 900000UL; // 5m then 15m
+    if (b.streak < 10) ++b.streak;
+  }
+  if (backoffMs > 0) {
+    b.cooldownUntilMs = now + backoffMs;
+    Serial.printf("[Flights] %s returned HTTP %d; backing off for %lus\n",
+                  host,
+                  httpCode,
+                  backoffMs / 1000UL);
+  }
+}
+
+bool fetchFromHost(const char* host,
+                   double lat,
+                   double lon,
+                   float radiusNm,
+                   String& payloadOut,
+                   int& httpCodeOut) {
+  char url[192];
+  snprintf(url,
+           sizeof(url),
+           "https://%s/v2/point/%.4f/%.4f/%.1f",
+           host,
+           lat,
+           lon,
+           radiusNm);
+
+  WiFiClientSecure client;
+  client.setInsecure();
+
+  HTTPClient http;
+  http.setTimeout(10000);
+  const bool isAdsbLol = (strcmp(host, "api.adsb.lol") == 0);
+  http.setUserAgent(isAdsbLol ? "ESP32-FlightClock/1.0" : "curl/8.5.0");
+  if (!http.begin(client, url)) {
+    Serial.printf("[Flights] http.begin failed (%s)\n", host);
+    httpCodeOut = -1;
+    return false;
+  }
+  http.addHeader("Accept", "application/json");
+#ifdef ADSB_LOL_API_KEY
+  if (isAdsbLol && ADSB_LOL_API_KEY[0] != '\0') {
+    http.addHeader("x-api-key", ADSB_LOL_API_KEY);
+  }
+#endif
+
+  httpCodeOut = http.GET();
+  if (httpCodeOut != HTTP_CODE_OK) {
+    Serial.printf("[Flights] HTTP %d (%s) from %s (freeHeap=%u)\n",
+                  httpCodeOut,
+                  http.errorToString(httpCodeOut).c_str(),
+                  host,
+                  static_cast<unsigned>(ESP.getFreeHeap()));
+    http.end();
+    return false;
+  }
+
+  payloadOut = http.getString();
+  http.end();
+  return true;
+}
+
 } // namespace
 
 namespace Flights {
@@ -133,48 +220,39 @@ bool fetchClosest(const AppConfig& cfg, FlightInfo& out) {
   if (radiusNm < 1.0f) radiusNm = 1.0f;
   if (radiusNm > 150.0f) radiusNm = 150.0f;
 
-  const char* host = (cfg.flightSource == "airplanes.live")
-                         ? "api.airplanes.live"
-                         : "api.adsb.lol";
+  bool primaryIsAdsbLol = (cfg.flightSource == "adsb.lol");
+  const char* primaryHost = primaryIsAdsbLol ? "api.adsb.lol" : "api.airplanes.live";
+  const char* fallbackHost = primaryIsAdsbLol ? "api.airplanes.live" : "api.adsb.lol";
+  HostBackoff& primaryBackoff = primaryIsAdsbLol ? adsbLolBackoff : airplanesBackoff;
+  HostBackoff& fallbackBackoff = primaryIsAdsbLol ? airplanesBackoff : adsbLolBackoff;
 
-  char url[192];
-  snprintf(url,
-           sizeof(url),
-           "https://%s/v2/point/%.4f/%.4f/%.1f",
-           host,
-           cfg.latitude,
-           cfg.longitude,
-           radiusNm);
+  unsigned long now = millis();
+  String payload;
+  bool gotPayload = false;
 
-  WiFiClientSecure client;
-  client.setInsecure();
+  if (!isCooldownActive(primaryBackoff, now)) {
+    int code = 0;
+    if (fetchFromHost(primaryHost, cfg.latitude, cfg.longitude, radiusNm, payload, code)) {
+      recordSuccess(primaryBackoff);
+      gotPayload = true;
+    } else {
+      recordFailure(primaryBackoff, code, primaryHost, now);
+    }
+  }
 
-  HTTPClient http;
-  http.setTimeout(10000);
-  http.setUserAgent("ESP32-FlightClock/1.0");
-  if (!http.begin(client, url)) {
-    Serial.println("[Flights] http.begin failed");
+  if (!gotPayload && !isCooldownActive(fallbackBackoff, now)) {
+    int code = 0;
+    if (fetchFromHost(fallbackHost, cfg.latitude, cfg.longitude, radiusNm, payload, code)) {
+      recordSuccess(fallbackBackoff);
+      gotPayload = true;
+    } else {
+      recordFailure(fallbackBackoff, code, fallbackHost, now);
+    }
+  }
+
+  if (!gotPayload) {
     return false;
   }
-  http.addHeader("Accept", "application/json");
-#ifdef ADSB_LOL_API_KEY
-  if (cfg.flightSource != "airplanes.live" && ADSB_LOL_API_KEY[0] != '\0') {
-    http.addHeader("x-api-key", ADSB_LOL_API_KEY);
-  }
-#endif
-
-  int httpCode = http.GET();
-  if (httpCode != HTTP_CODE_OK) {
-    Serial.printf("[Flights] HTTP %d (%s) from %s\n",
-                  httpCode,
-                  http.errorToString(httpCode).c_str(),
-                  host);
-    http.end();
-    return false;
-  }
-
-  String payload = http.getString();
-  http.end();
 
   JsonDocument filter;
   JsonObject acFilter = filter["ac"].add<JsonObject>();

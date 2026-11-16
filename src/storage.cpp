@@ -53,7 +53,7 @@ void load(AppConfig& cfg) {
   cfg.searchRadiusKm = prefs.getFloat("radKm", 15.0f);
   cfg.flightPollSec = prefs.getUShort("fPoll", 15);
   cfg.maxAltitudeFt = prefs.getInt("maxAlt", 50000);
-  cfg.flightSource = prefs.getString("fSrc", "adsb.lol");
+  cfg.flightSource = prefs.getString("fSrc", "airplanes.live");
   cfg.quietHoursEnabled = prefs.getBool("qEn", true);
   cfg.quietStartHour = prefs.getUChar("qStart", 1);
   cfg.quietEndHour = prefs.getUChar("qEnd", 6);

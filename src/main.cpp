@@ -68,6 +68,7 @@ bool connectWifiSta(uint32_t timeoutMs = 15000) {
                 static_cast<unsigned>(cfg.wifiPass.length()));
   Display::showBootScreen("Connecting Wi-Fi...");
   WiFi.persistent(false);
+  WiFi.setHostname(MDNS_HOSTNAME); // Must be set before WiFi.mode(WIFI_STA) on ESP32 for DHCP Option 12
   WiFi.mode(WIFI_STA);
   WiFi.setHostname(MDNS_HOSTNAME);
   WiFi.setSleep(false); // Keep RX active for reliable mDNS multicast
@@ -82,8 +83,9 @@ bool connectWifiSta(uint32_t timeoutMs = 15000) {
   Serial.println();
 
   if (WiFi.status() == WL_CONNECTED) {
-    Serial.printf("[WiFi] Connected! IP: %s  RSSI: %d dBm\n",
+    Serial.printf("[WiFi] Connected! IP: %s  Host: %s  RSSI: %d dBm\n",
                   WiFi.localIP().toString().c_str(),
+                  WiFi.getHostname(),
                   WiFi.RSSI());
     return true;
   }
@@ -251,6 +253,10 @@ void loop() {
                       weather.tempC,
                       Weather::describeCode(weather.weatherCode),
                       weather.humidity);
+        if (!flight.active && testFlightUntilMs <= now) {
+          String ip = netState.wifiConnected ? WiFi.localIP().toString() : "";
+          Display::renderClockWeather(cfg, weather, netState.wifiConnected, netState.timeSynced, ip.c_str());
+        }
       } else {
         Serial.println("[Weather] Fetch failed");
       }
