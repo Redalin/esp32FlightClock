@@ -13,7 +13,7 @@ bool fetch(const AppConfig& cfg, WeatherData& out) {
   WiFiClientSecure client;
   client.setInsecure();
 
-  char url[256];
+  char url[320];
   snprintf(
       url,
       sizeof(url),
@@ -25,13 +25,19 @@ bool fetch(const AppConfig& cfg, WeatherData& out) {
       cfg.longitude);
 
   HTTPClient http;
-  http.setTimeout(8000);
+  http.useHTTP10(true); // Avoid chunked transfer encoding on getStream()
+  http.setTimeout(10000);
   if (!http.begin(client, url)) {
+    Serial.println("[Weather] http.begin failed");
     return false;
   }
 
   int httpCode = http.GET();
   if (httpCode != HTTP_CODE_OK) {
+    Serial.printf("[Weather] HTTP %d (%s), freeHeap=%u\n",
+                  httpCode,
+                  http.errorToString(httpCode).c_str(),
+                  static_cast<unsigned>(ESP.getFreeHeap()));
     http.end();
     return false;
   }
@@ -52,6 +58,7 @@ bool fetch(const AppConfig& cfg, WeatherData& out) {
   http.end();
 
   if (err) {
+    Serial.printf("[Weather] JSON error: %s\n", err.c_str());
     return false;
   }
 

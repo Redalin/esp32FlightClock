@@ -51,6 +51,8 @@ bool connectWifiSta(uint32_t timeoutMs = 15000) {
   Display::showBootScreen("Connecting Wi-Fi...");
   WiFi.persistent(false);
   WiFi.mode(WIFI_STA);
+  WiFi.setHostname(MDNS_HOSTNAME);
+  WiFi.setSleep(false); // Keep RX active for reliable mDNS multicast
   WiFi.setTxPower(WIFI_POWER_11dBm); // Prevents RF brownout on ESP32-C3 Super Mini
   WiFi.begin(cfg.wifiSsid.c_str(), cfg.wifiPass.c_str());
 
@@ -96,8 +98,13 @@ void setupNetwork() {
   if (connectWifiSta()) {
     netState.wifiConnected = true;
     netState.apMode = false;
+    MDNS.end();
     if (MDNS.begin(MDNS_HOSTNAME)) {
-      Serial.printf("[mDNS] http://%s.local\n", MDNS_HOSTNAME);
+      MDNS.setInstanceName("ESP32 Flight Clock");
+      MDNS.addService("http", "tcp", 80);
+      Serial.printf("[mDNS] http://%s.local (HTTP service registered)\n", MDNS_HOSTNAME);
+    } else {
+      Serial.println("[mDNS] Failed to start responder");
     }
     applyTimezone();
     Serial.printf("[NTP] Syncing time (TZ=%s)\n", cfg.timezone.c_str());

@@ -75,13 +75,18 @@ bool fetchClosest(const AppConfig& cfg, FlightInfo& out) {
   client.setInsecure();
 
   HTTPClient http;
-  http.setTimeout(8000);
+  http.useHTTP10(true); // Avoid chunked transfer encoding on getStream()
+  http.setTimeout(10000);
   if (!http.begin(client, url)) {
+    Serial.println("[Flights] http.begin failed");
     return false;
   }
 
   int httpCode = http.GET();
   if (httpCode != HTTP_CODE_OK) {
+    Serial.printf("[Flights] HTTP %d (%s)\n",
+                  httpCode,
+                  http.errorToString(httpCode).c_str());
     http.end();
     return false;
   }
