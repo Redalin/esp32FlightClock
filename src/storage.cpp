@@ -4,17 +4,48 @@
 namespace Storage {
 
 void load(AppConfig& cfg) {
+#ifdef DEFAULT_WIFI_SSID
+  const char* defaultSsid = DEFAULT_WIFI_SSID;
+#else
+  const char* defaultSsid = "";
+#endif
+#ifdef DEFAULT_WIFI_PASS
+  const char* defaultPass = DEFAULT_WIFI_PASS;
+#else
+  const char* defaultPass = "";
+#endif
+#ifdef DEFAULT_TIMEZONE
+  const char* defaultTz = DEFAULT_TIMEZONE;
+#else
+  const char* defaultTz = "UTC0";
+#endif
+
   Preferences prefs;
   if (!prefs.begin(CONFIG_NAMESPACE, false)) {
+    cfg.wifiSsid = defaultSsid;
+    cfg.wifiPass = defaultPass;
+    cfg.timezone = defaultTz;
+#if defined(DEFAULT_LATITUDE) && defined(DEFAULT_LONGITUDE)
+    cfg.latitude = DEFAULT_LATITUDE;
+    cfg.longitude = DEFAULT_LONGITUDE;
+    cfg.locationConfigured = true;
+#endif
     return;
   }
 
-  cfg.wifiSsid = prefs.getString("ssid", "");
-  cfg.wifiPass = prefs.getString("pass", "");
+  cfg.wifiSsid = prefs.getString("ssid", defaultSsid);
+  cfg.wifiPass = prefs.getString("pass", defaultPass);
   cfg.latitude = prefs.getDouble("lat", 0.0);
   cfg.longitude = prefs.getDouble("lon", 0.0);
   cfg.locationConfigured = prefs.getBool("locSet", false);
-  cfg.timezone = prefs.getString("tz", "UTC0");
+#if defined(DEFAULT_LATITUDE) && defined(DEFAULT_LONGITUDE)
+  if (!cfg.locationConfigured) {
+    cfg.latitude = DEFAULT_LATITUDE;
+    cfg.longitude = DEFAULT_LONGITUDE;
+    cfg.locationConfigured = true;
+  }
+#endif
+  cfg.timezone = prefs.getString("tz", defaultTz);
   cfg.use24Hour = prefs.getBool("h24", true);
   cfg.useFahrenheit = prefs.getBool("fahr", false);
   cfg.useImperialDist = prefs.getBool("imp", false);
