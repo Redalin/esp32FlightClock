@@ -380,8 +380,8 @@ const char WEB_UI_HTML[] PROGMEM = R"rawliteral(<!DOCTYPE html>
         <div class="field">
           <label for="flightSource">ADS-B Data Source</label>
           <select id="flightSource" name="flightSource">
-            <option value="airplanes.live">airplanes.live</option>
             <option value="adsb.lol">adsb.lol</option>
+            <option value="airplanes.live">airplanes.live</option>
           </select>
         </div>
       </fieldset>

@@ -45,5 +45,5 @@ struct AppConfig {
   float searchRadiusKm = 15.0f;
   uint16_t flightPollSec = 15;
   int32_t maxAltitudeFt = 50000;
-  String flightSource = "airplanes.live"; // "airplanes.live" or "adsb.lol"
+  String flightSource = "adsb.lol"; // "adsb.lol" or "airplanes.live"
 };

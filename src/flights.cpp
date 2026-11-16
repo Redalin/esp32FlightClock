@@ -58,9 +58,9 @@ bool fetchClosest(const AppConfig& cfg, FlightInfo& out) {
   if (radiusNm < 1.0f) radiusNm = 1.0f;
   if (radiusNm > 150.0f) radiusNm = 150.0f;
 
-  const char* host = (cfg.flightSource == "adsb.lol")
-                         ? "api.adsb.lol"
-                         : "api.airplanes.live";
+  const char* host = (cfg.flightSource == "airplanes.live")
+                         ? "api.airplanes.live"
+                         : "api.adsb.lol";
 
   char url[192];
   snprintf(url,
@@ -75,21 +75,26 @@ bool fetchClosest(const AppConfig& cfg, FlightInfo& out) {
   client.setInsecure();
 
   HTTPClient http;
-  http.useHTTP10(true); // Avoid chunked transfer encoding on getStream()
   http.setTimeout(10000);
+  http.setUserAgent("ESP32-FlightClock/1.0");
   if (!http.begin(client, url)) {
     Serial.println("[Flights] http.begin failed");
     return false;
   }
+  http.addHeader("Accept", "application/json");
 
   int httpCode = http.GET();
   if (httpCode != HTTP_CODE_OK) {
-    Serial.printf("[Flights] HTTP %d (%s)\n",
+    Serial.printf("[Flights] HTTP %d (%s) from %s\n",
                   httpCode,
-                  http.errorToString(httpCode).c_str());
+                  http.errorToString(httpCode).c_str(),
+                  host);
     http.end();
     return false;
   }
+
+  String payload = http.getString();
+  http.end();
 
   JsonDocument filter;
   JsonObject acFilter = filter["ac"].add<JsonObject>();
@@ -106,10 +111,10 @@ bool fetchClosest(const AppConfig& cfg, FlightInfo& out) {
 
   JsonDocument doc;
   DeserializationError err =
-      deserializeJson(doc, http.getStream(), DeserializationOption::Filter(filter));
-  http.end();
+      deserializeJson(doc, payload, DeserializationOption::Filter(filter));
 
   if (err) {
+    Serial.printf("[Flights] JSON error: %s\n", err.c_str());
     return false;
   }
 
