@@ -42,6 +42,9 @@ void handleGetConfig() {
   doc["flightPollSec"] = gCfg->flightPollSec;
   doc["maxAltitudeFt"] = gCfg->maxAltitudeFt;
   doc["flightSource"] = gCfg->flightSource;
+  doc["quietHoursEnabled"] = gCfg->quietHoursEnabled;
+  doc["quietStartHour"] = gCfg->quietStartHour;
+  doc["quietEndHour"] = gCfg->quietEndHour;
 
   String out;
   serializeJson(doc, out);
@@ -110,6 +113,22 @@ void handlePostConfig() {
   String src = server.arg("flightSource");
   if (src == "airplanes.live" || src == "adsb.lol") {
     gCfg->flightSource = src;
+  }
+
+  if (server.hasArg("quietHoursEnabled")) {
+    gCfg->quietHoursEnabled = parseBool(server.arg("quietHoursEnabled"));
+  }
+  if (server.hasArg("quietStartHour")) {
+    int qStart = server.arg("quietStartHour").toInt();
+    if (qStart >= 0 && qStart <= 23) {
+      gCfg->quietStartHour = static_cast<uint8_t>(qStart);
+    }
+  }
+  if (server.hasArg("quietEndHour")) {
+    int qEnd = server.arg("quietEndHour").toInt();
+    if (qEnd >= 0 && qEnd <= 23) {
+      gCfg->quietEndHour = static_cast<uint8_t>(qEnd);
+    }
   }
 
   Storage::save(*gCfg);

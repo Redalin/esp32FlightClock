@@ -384,6 +384,22 @@ const char WEB_UI_HTML[] PROGMEM = R"rawliteral(<!DOCTYPE html>
             <option value="airplanes.live">airplanes.live</option>
           </select>
         </div>
+
+        <div class="check-row">
+          <input type="checkbox" id="quietHoursEnabled" name="quietHoursEnabled">
+          <label for="quietHoursEnabled">Pause flight polling during quiet hours</label>
+        </div>
+
+        <div class="field">
+          <label>Quiet Hours (24h, local time)</label>
+          <span id="quiet-hint" class="hint">Start and end hour (0&ndash;23). Example: 1 to 6 pauses 1:00 AM&ndash;6:00 AM; 23 to 6 pauses overnight.</span>
+          <div class="input-row">
+            <input type="number" id="quietStartHour" name="quietStartHour" min="0" max="23" required
+              aria-label="Quiet start hour" aria-describedby="quiet-hint">
+            <input type="number" id="quietEndHour" name="quietEndHour" min="0" max="23" required
+              aria-label="Quiet end hour" aria-describedby="quiet-hint">
+          </div>
+        </div>
       </fieldset>
 
       <div class="actions">
@@ -551,6 +567,9 @@ const char WEB_UI_HTML[] PROGMEM = R"rawliteral(<!DOCTYPE html>
         document.getElementById('flightPollSec').value = c.flightPollSec ?? 15;
         document.getElementById('maxAltitudeFt').value = c.maxAltitudeFt ?? 50000;
         document.getElementById('flightSource').value = c.flightSource || 'airplanes.live';
+        document.getElementById('quietHoursEnabled').checked = c.quietHoursEnabled !== false;
+        document.getElementById('quietStartHour').value = c.quietStartHour ?? 1;
+        document.getElementById('quietEndHour').value = c.quietEndHour ?? 6;
       } catch {}
     }
 
@@ -583,7 +602,7 @@ const char WEB_UI_HTML[] PROGMEM = R"rawliteral(<!DOCTYPE html>
       saveBtn.disabled = true;
       const body = new URLSearchParams(new FormData(form));
       // Ensure unchecked checkboxes are explicitly sent as false
-      ['use24Hour', 'useFahrenheit', 'useImperialDist'].forEach((k) => {
+      ['use24Hour', 'useFahrenheit', 'useImperialDist', 'quietHoursEnabled'].forEach((k) => {
         if (!document.getElementById(k).checked) body.set(k, 'false');
       });
 

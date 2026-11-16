@@ -54,6 +54,9 @@ void load(AppConfig& cfg) {
   cfg.flightPollSec = prefs.getUShort("fPoll", 15);
   cfg.maxAltitudeFt = prefs.getInt("maxAlt", 50000);
   cfg.flightSource = prefs.getString("fSrc", "adsb.lol");
+  cfg.quietHoursEnabled = prefs.getBool("qEn", true);
+  cfg.quietStartHour = prefs.getUChar("qStart", 1);
+  cfg.quietEndHour = prefs.getUChar("qEnd", 6);
 
   prefs.end();
 }
@@ -78,6 +81,9 @@ void save(const AppConfig& cfg) {
   prefs.putUShort("fPoll", cfg.flightPollSec);
   prefs.putInt("maxAlt", cfg.maxAltitudeFt);
   prefs.putString("fSrc", cfg.flightSource);
+  prefs.putBool("qEn", cfg.quietHoursEnabled);
+  prefs.putUChar("qStart", cfg.quietStartHour);
+  prefs.putUChar("qEnd", cfg.quietEndHour);
 
   prefs.end();
 }

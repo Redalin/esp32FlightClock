@@ -28,6 +28,24 @@ void applyTimezone() {
   configTzTime(cfg.timezone.c_str(), "pool.ntp.org", "time.nist.gov");
 }
 
+bool isQuietHours(const AppConfig& c, bool timeSynced) {
+  if (!c.quietHoursEnabled || !timeSynced) {
+    return false;
+  }
+  if (c.quietStartHour == c.quietEndHour) {
+    return false;
+  }
+  struct tm ti;
+  if (!getLocalTime(&ti, 5)) {
+    return false;
+  }
+  int h = ti.tm_hour;
+  if (c.quietStartHour < c.quietEndHour) {
+    return (h >= c.quietStartHour && h < c.quietEndHour);
+  }
+  return (h >= c.quietStartHour || h < c.quietEndHour);
+}
+
 bool connectWifiSta(uint32_t timeoutMs = 15000) {
   if (cfg.wifiSsid.isEmpty()) {
     Serial.println("[WiFi] No SSID configured.");
@@ -242,7 +260,14 @@ void loop() {
     unsigned long flightIntervalMs = flight.active
                                          ? FLIGHT_ACTIVE_POLL_MS
                                          : (static_cast<unsigned long>(cfg.flightPollSec) * 1000UL);
-    if (lastFlightPollMs == 0 || (now - lastFlightPollMs) >= flightIntervalMs) {
+    if (isQuietHours(cfg, netState.timeSynced)) {
+      if (flight.active && (now - flight.lastSeenMs) >= FLIGHT_HOLD_MS) {
+        flight.active = false;
+        digitalWrite(LED_PIN, HIGH);
+        lastRenderMs = 0;
+        Serial.println("[Flight] Quiet hours active, returning to clock");
+      }
+    } else if (lastFlightPollMs == 0 || (now - lastFlightPollMs) >= flightIntervalMs) {
       lastFlightPollMs = now;
       FlightInfo latest;
       if (Flights::fetchClosest(cfg, latest)) {

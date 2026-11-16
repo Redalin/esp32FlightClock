@@ -47,4 +47,7 @@ struct AppConfig {
   uint16_t flightPollSec = 30;
   int32_t maxAltitudeFt = 5000;
   String flightSource = "adsb.lol"; // "adsb.lol" or "airplanes.live"
+  bool quietHoursEnabled = true;
+  uint8_t quietStartHour = 1;       // 0..23 (local time)
+  uint8_t quietEndHour = 6;         // 0..23 (local time)
 };
