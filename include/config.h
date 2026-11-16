@@ -42,8 +42,8 @@ struct AppConfig {
   uint8_t brightness = 220;     // 20..255
 
   // Flight Radar
-  float searchRadiusKm = 15.0f;
-  uint16_t flightPollSec = 15;
-  int32_t maxAltitudeFt = 50000;
+  float searchRadiusKm = 5.0f;
+  uint16_t flightPollSec = 10;
+  int32_t maxAltitudeFt = 5000;
   String flightSource = "adsb.lol"; // "adsb.lol" or "airplanes.live"
 };

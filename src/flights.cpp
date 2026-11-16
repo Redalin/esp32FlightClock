@@ -45,6 +45,81 @@ void copyTrimmed(char* dst, size_t dstSize, const char* src) {
   }
 }
 
+char cachedCallsign[16] = {0};
+char cachedOrigin[8] = {0};
+char cachedDest[8] = {0};
+
+void fetchRoute(const char* callsign,
+                char* originOut,
+                size_t originSize,
+                char* destOut,
+                size_t destSize) {
+  originOut[0] = '\0';
+  destOut[0] = '\0';
+
+  if (!callsign || callsign[0] == '\0' || strcmp(callsign, "UNKNOWN") == 0) {
+    return;
+  }
+
+  if (strcmp(callsign, cachedCallsign) == 0) {
+    strlcpy(originOut, cachedOrigin, originSize);
+    strlcpy(destOut, cachedDest, destSize);
+    return;
+  }
+
+  strlcpy(cachedCallsign, callsign, sizeof(cachedCallsign));
+  cachedOrigin[0] = '\0';
+  cachedDest[0] = '\0';
+
+  char url[96];
+  snprintf(url, sizeof(url), "https://api.adsbdb.com/v0/callsign/%s", callsign);
+
+  WiFiClientSecure client;
+  client.setInsecure();
+
+  HTTPClient http;
+  http.setTimeout(5000);
+  http.setUserAgent("ESP32-FlightClock/1.0");
+  if (!http.begin(client, url)) {
+    return;
+  }
+
+  int httpCode = http.GET();
+  if (httpCode != HTTP_CODE_OK) {
+    http.end();
+    return;
+  }
+
+  String payload = http.getString();
+  http.end();
+
+  JsonDocument filter;
+  filter["response"]["flightroute"]["origin"]["iata_code"] = true;
+  filter["response"]["flightroute"]["origin"]["icao_code"] = true;
+  filter["response"]["flightroute"]["destination"]["iata_code"] = true;
+  filter["response"]["flightroute"]["destination"]["icao_code"] = true;
+
+  JsonDocument doc;
+  if (deserializeJson(doc, payload, DeserializationOption::Filter(filter))) {
+    return;
+  }
+
+  JsonObject route = doc["response"]["flightroute"];
+  if (route.isNull()) {
+    return;
+  }
+
+  const char* orig = route["origin"]["iata_code"] | "";
+  if (orig[0] == '\0') orig = route["origin"]["icao_code"] | "";
+  const char* dest = route["destination"]["iata_code"] | "";
+  if (dest[0] == '\0') dest = route["destination"]["icao_code"] | "";
+
+  strlcpy(cachedOrigin, orig, sizeof(cachedOrigin));
+  strlcpy(cachedDest, dest, sizeof(cachedDest));
+  strlcpy(originOut, cachedOrigin, originSize);
+  strlcpy(destOut, cachedDest, destSize);
+}
+
 } // namespace
 
 namespace Flights {
@@ -159,7 +234,6 @@ bool fetchClosest(const AppConfig& cfg, FlightInfo& out) {
       }
       copyTrimmed(best.registration, sizeof(best.registration), plane["r"] | "");
       copyTrimmed(best.aircraftType, sizeof(best.aircraftType), plane["t"] | "");
-      copyTrimmed(best.squawk, sizeof(best.squawk), plane["squawk"] | "");
       best.altitudeFt = altFt;
       best.verticalRateFpm = plane["baro_rate"] | 0;
       best.speedKnots = plane["gs"] | 0.0f;
@@ -171,6 +245,11 @@ bool fetchClosest(const AppConfig& cfg, FlightInfo& out) {
   }
 
   if (countInRange > 0) {
+    fetchRoute(best.callsign,
+               best.origin,
+               sizeof(best.origin),
+               best.destination,
+               sizeof(best.destination));
     best.totalInRange = countInRange;
     out = best;
   } else {

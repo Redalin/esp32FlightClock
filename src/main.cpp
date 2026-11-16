@@ -121,7 +121,8 @@ void triggerTestFlight() {
   strlcpy(testFlight.callsign, "ANZ123", sizeof(testFlight.callsign));
   strlcpy(testFlight.registration, "ZK-NZE", sizeof(testFlight.registration));
   strlcpy(testFlight.aircraftType, "B789", sizeof(testFlight.aircraftType));
-  strlcpy(testFlight.squawk, "4210", sizeof(testFlight.squawk));
+  strlcpy(testFlight.origin, "LAX", sizeof(testFlight.origin));
+  strlcpy(testFlight.destination, "AKL", sizeof(testFlight.destination));
   testFlight.altitudeFt = 28400;
   testFlight.verticalRateFpm = 1450;
   testFlight.speedKnots = 468.0f;
@@ -232,9 +233,11 @@ void loop() {
         if (latest.active) {
           flight = latest;
           digitalWrite(LED_PIN, LOW); // Indicate overhead plane
-          Serial.printf("[Flight] %s (%s) alt=%ldft dist=%.1fkm\n",
+          Serial.printf("[Flight] %s (%s) %s->%s alt=%ldft dist=%.1fkm\n",
                         flight.callsign,
                         flight.aircraftType,
+                        flight.origin[0] ? flight.origin : "?",
+                        flight.destination[0] ? flight.destination : "?",
                         static_cast<long>(flight.altitudeFt),
                         flight.distanceKm);
         } else if (flight.active && (now - flight.lastSeenMs) >= FLIGHT_HOLD_MS) {

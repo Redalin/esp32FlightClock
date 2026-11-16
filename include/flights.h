@@ -7,7 +7,8 @@ struct FlightInfo {
   char callsign[16] = {0};
   char registration[12] = {0};
   char aircraftType[8] = {0};
-  char squawk[8] = {0};
+  char origin[8] = {0};
+  char destination[8] = {0};
   int32_t altitudeFt = 0;
   int32_t verticalRateFpm = 0;
   float speedKnots = 0.0f;

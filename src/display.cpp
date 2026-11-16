@@ -461,16 +461,18 @@ void renderFlightScreen(const AppConfig& cfg, const FlightInfo& flight) {
   spr.setTextColor(COL_CYAN, COL_BG);
   drawText(distBuf, 196, 172, &fonts::Font2);
 
-  // Footer: Heading & Squawk
-  char footBuf[32];
-  if (flight.squawk[0]) {
-    snprintf(footBuf, sizeof(footBuf), "HDG %03.0f  SQK %s", flight.trackDeg, flight.squawk);
-  } else {
-    snprintf(footBuf, sizeof(footBuf), "HDG %03.0f", flight.trackDeg);
-  }
+  // Footer: Origin -> Destination
   spr.setTextDatum(lgfx::middle_center);
-  spr.setTextColor(COL_MUTED, COL_BG);
-  drawText(footBuf, 120, 202, &fonts::Font2);
+  if (flight.origin[0] && flight.destination[0]) {
+    char routeBuf[24];
+    snprintf(routeBuf, sizeof(routeBuf), "%s -> %s", flight.origin, flight.destination);
+    spr.setTextColor(COL_AMBER, COL_BG);
+    bool shortCodes = (strlen(flight.origin) <= 3 && strlen(flight.destination) <= 3);
+    drawText(routeBuf, 120, 202, shortCodes ? &fonts::Font4 : &fonts::Font2);
+  } else {
+    spr.setTextColor(COL_MUTED, COL_BG);
+    drawText("Route N/A", 120, 202, &fonts::Font2);
+  }
 
   spr.pushSprite(0, 0);
 }
