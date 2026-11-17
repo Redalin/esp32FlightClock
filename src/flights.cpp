@@ -299,7 +299,6 @@ bool fetchFromHost(const char* host,
   client.setInsecure();
 
   HTTPClient http;
-  http.useHTTP10(true); // Avoid chunked transfer encoding on getStream()
   http.setTimeout(10000);
   const bool isAdsbLol = (strcmp(host, "api.adsb.lol") == 0);
   http.setUserAgent(isAdsbLol ? "ESP32-FlightClock/1.0" : "curl/8.5.0");
@@ -326,9 +325,11 @@ bool fetchFromHost(const char* host,
     return false;
   }
 
-  DeserializationError err =
-      deserializeJson(docOut, http.getStream(), DeserializationOption::Filter(filter));
+  String payload = http.getString();
   http.end();
+
+  DeserializationError err =
+      deserializeJson(docOut, payload, DeserializationOption::Filter(filter));
   if (err) {
     Serial.printf("[Flights] JSON error from %s: %s\n", host, err.c_str());
     return false;
