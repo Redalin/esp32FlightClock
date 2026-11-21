@@ -33,6 +33,7 @@ string_keys = {
     "WIFI_PASS": "DEFAULT_WIFI_PASS",
     "TIMEZONE": "DEFAULT_TIMEZONE",
     "ADSB_LOL_API_KEY": "ADSB_LOL_API_KEY",
+    "OTA_PASSWORD": "OTA_PASSWORD",
 }
 
 for src_key, macro_name in string_keys.items():
@@ -49,3 +50,9 @@ for src_key, macro_name in (
             env.Append(CPPDEFINES=[(macro_name, env_vars[src_key])])
         except ValueError:
             pass
+
+if env.GetProjectOption("upload_protocol", "") == "espota":
+    if env_vars.get("OTA_HOST"):
+        env.Replace(UPLOAD_PORT=env_vars["OTA_HOST"])
+    if env_vars.get("OTA_PASSWORD"):
+        env.Append(UPLOAD_FLAGS=["--auth=" + env_vars["OTA_PASSWORD"]])

@@ -195,6 +195,18 @@ const char WEB_UI_HTML[] PROGMEM = R"rawliteral(<!DOCTYPE html>
     .banner.show { display: block; }
     .banner.ok { border-color: var(--ok); color: var(--ok); }
     .banner.err { border-color: var(--danger); color: var(--danger); }
+    progress {
+      width: 100%;
+      height: 0.75rem;
+      accent-color: var(--accent);
+    }
+    input[type="file"] {
+      width: 100%;
+      padding: 0.5rem;
+      background: var(--bg);
+      color: var(--text);
+      border: 1.5px dashed var(--border);
+    }
     .visually-hidden {
       position: absolute;
       clip-path: inset(50%);
@@ -241,7 +253,7 @@ const char WEB_UI_HTML[] PROGMEM = R"rawliteral(<!DOCTYPE html>
           <label for="wifiSsid">Wi-Fi Network (SSID) <span aria-hidden="true">*</span></label>
           <span id="ssid-hint" class="hint">2.4 GHz Wi-Fi network name. Use Scan to pick a nearby network.</span>
           <div class="input-row">
-            <input type="text" id="wifiSsid" name="wifiSsid" list="ssid-list" required maxlength="32"
+            <input type="text" id="wifiSsid" name="wifiSsid" required maxlength="32"
               autocorrect="off" autocapitalize="none" spellcheck="false" enterkeyhint="next"
               aria-describedby="ssid-hint" data-error="ssid-error">
             <button type="button" id="btn-scan">Scan</button>
@@ -249,7 +261,7 @@ const char WEB_UI_HTML[] PROGMEM = R"rawliteral(<!DOCTYPE html>
           <div id="ssid-error" class="error-msg">
             <span role="img" aria-label="Error">&#10060;</span> Enter a Wi-Fi network name (1&ndash;32 characters).
           </div>
-          <datalist id="ssid-list"></datalist>
+          <select id="ssid-select" aria-label="Scanned Wi-Fi networks" style="margin-top:0.35rem;" hidden></select>
         </div>
 
         <div class="field">
@@ -407,6 +419,24 @@ const char WEB_UI_HTML[] PROGMEM = R"rawliteral(<!DOCTYPE html>
         <button type="button" id="btn-reboot">Reboot ESP32</button>
       </div>
     </form>
+
+    <section class="card" aria-labelledby="ota-heading">
+      <h2 id="ota-heading" style="margin:0 0 0.5rem;font-size:1.1rem;">Firmware Update (OTA)</h2>
+      <p class="hint" style="margin:0 0 0.875rem;">
+        Current build: <strong id="st-fw">--</strong>. Upload a compiled <code>firmware.bin</code> file to update wirelessly, or run <code>pio run -e esp32-c3-supermini-ota -t upload</code>.
+      </p>
+      <div class="field">
+        <label for="ota-file">Firmware Binary (.bin)</label>
+        <input type="file" id="ota-file" accept=".bin,application/octet-stream">
+      </div>
+      <div class="field" id="ota-progress-wrap" hidden>
+        <progress id="ota-progress" max="100" value="0"></progress>
+        <span id="ota-status" class="hint" role="status" aria-live="polite"></span>
+      </div>
+      <div class="actions">
+        <button type="button" id="btn-ota">Upload Firmware</button>
+      </div>
+    </section>
   </main>
 
   <script>
@@ -513,6 +543,16 @@ const char WEB_UI_HTML[] PROGMEM = R"rawliteral(<!DOCTYPE html>
     });
 
     // Wi-Fi scan
+    const ssidSelect = document.getElementById('ssid-select');
+    ssidSelect.addEventListener('change', (e) => {
+      if (e.target.value) {
+        const ssidInput = document.getElementById('wifiSsid');
+        ssidInput.value = e.target.value;
+        syncAria(ssidInput, false);
+        document.getElementById('wifiPass').focus();
+      }
+    });
+
     document.getElementById('btn-scan').addEventListener('click', async () => {
       const btn = document.getElementById('btn-scan');
       btn.disabled = true;
@@ -520,15 +560,25 @@ const char WEB_UI_HTML[] PROGMEM = R"rawliteral(<!DOCTYPE html>
       try {
         const res = await fetch('/api/scan');
         const nets = await res.json();
-        const dl = document.getElementById('ssid-list');
-        dl.innerHTML = '';
-        nets.forEach((n) => {
-          const opt = document.createElement('option');
-          opt.value = n.ssid;
-          opt.label = `${n.ssid} (${n.rssi} dBm)`;
-          dl.appendChild(opt);
-        });
-        showBanner(`Found ${nets.length} Wi-Fi network(s). Select from the SSID field.`, true);
+        ssidSelect.innerHTML = '';
+        if (nets.length > 0) {
+          const placeholder = document.createElement('option');
+          placeholder.value = '';
+          placeholder.textContent = `-- Select a network (${nets.length} found) --`;
+          ssidSelect.appendChild(placeholder);
+          nets.forEach((n) => {
+            const opt = document.createElement('option');
+            opt.value = n.ssid;
+            opt.textContent = `${n.ssid} (${n.rssi} dBm)`;
+            ssidSelect.appendChild(opt);
+          });
+          ssidSelect.hidden = false;
+          ssidSelect.focus();
+          showBanner(`Found ${nets.length} Wi-Fi network(s). Pick one from the dropdown below.`, true);
+        } else {
+          ssidSelect.hidden = true;
+          showBanner('No 2.4 GHz Wi-Fi networks found. Try again or type the SSID manually.', false);
+        }
       } catch {
         showBanner('Wi-Fi scan failed.', false);
       } finally {
@@ -546,6 +596,7 @@ const char WEB_UI_HTML[] PROGMEM = R"rawliteral(<!DOCTYPE html>
         document.getElementById('st-time').textContent = data.time || '--:--';
         document.getElementById('st-weather').textContent = data.weather || '--';
         document.getElementById('st-flight').textContent = data.flight || 'None in range';
+        if (data.firmware) document.getElementById('st-fw').textContent = data.firmware;
       } catch {
         document.getElementById('st-wifi').textContent = 'Offline';
       }
@@ -581,6 +632,70 @@ const char WEB_UI_HTML[] PROGMEM = R"rawliteral(<!DOCTYPE html>
     document.getElementById('btn-reboot').addEventListener('click', async () => {
       await fetch('/api/reboot', { method: 'POST' });
       showBanner('Rebooting ESP32-C3...', true);
+    });
+
+    // Web OTA firmware upload
+    document.getElementById('btn-ota').addEventListener('click', () => {
+      const fileInput = document.getElementById('ota-file');
+      const file = fileInput.files && fileInput.files[0];
+      if (!file) {
+        showBanner('Select a firmware.bin file first.', false);
+        return;
+      }
+      if (!file.name.toLowerCase().endsWith('.bin')) {
+        showBanner('Please choose a compiled .bin firmware file.', false);
+        return;
+      }
+
+      const btn = document.getElementById('btn-ota');
+      const wrap = document.getElementById('ota-progress-wrap');
+      const prog = document.getElementById('ota-progress');
+      const status = document.getElementById('ota-status');
+
+      btn.disabled = true;
+      wrap.hidden = false;
+      prog.value = 0;
+      status.textContent = `Uploading ${file.name} (${(file.size / 1024).toFixed(0)} KB)...`;
+
+      const formData = new FormData();
+      formData.append('firmware', file, file.name);
+
+      const xhr = new XMLHttpRequest();
+      xhr.open('POST', `/api/ota?size=${encodeURIComponent(file.size)}`, true);
+
+      xhr.upload.addEventListener('progress', (ev) => {
+        if (ev.lengthComputable) {
+          const pct = Math.round((ev.loaded / ev.total) * 100);
+          prog.value = pct;
+          status.textContent = pct < 100 ? `Uploading & flashing... ${pct}%` : 'Verifying & rebooting...';
+        }
+      });
+
+      xhr.addEventListener('load', () => {
+        let msg = 'Firmware updated! Rebooting...';
+        let ok = xhr.status >= 200 && xhr.status < 300;
+        try {
+          const res = JSON.parse(xhr.responseText);
+          if (res.message) msg = res.message;
+          if (typeof res.ok === 'boolean') ok = res.ok;
+        } catch {}
+        status.textContent = msg;
+        showBanner(msg, ok);
+        if (ok) {
+          prog.value = 100;
+          setTimeout(() => location.reload(), 6000);
+        } else {
+          btn.disabled = false;
+        }
+      });
+
+      xhr.addEventListener('error', () => {
+        status.textContent = 'Upload failed (connection lost).';
+        showBanner('Firmware upload failed. Check Wi-Fi connection and retry.', false);
+        btn.disabled = false;
+      });
+
+      xhr.send(formData);
     });
 
     form.addEventListener('submit', async (e) => {

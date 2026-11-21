@@ -104,6 +104,7 @@ enum class ScreenMode : uint8_t {
   NONE = 0,
   BOOT,
   PORTAL,
+  OTA,
   CLOCK,
   FLIGHT
 };
@@ -428,6 +429,50 @@ void showPortalScreen(const char* apSsid, const char* apIp) {
   drawText("2. OPEN BROWSER", kCx, 148, &fonts::Font2);
   spr.setTextColor(COL_CYAN, COL_PANEL);
   drawText(apIp, kCx, 171, &fonts::Font4);
+
+  spr.pushSprite(0, 0);
+}
+
+void showOtaScreen(uint8_t percent, const char* statusLine) {
+  activeScreen = ScreenMode::OTA;
+  if (percent > 100) percent = 100;
+
+  if (!spriteReady) {
+    tft.fillScreen(COL_BG);
+    tft.setTextDatum(lgfx::middle_center);
+    tft.setTextColor(COL_CYAN, COL_BG);
+    tft.setFont(&fonts::Font4);
+    char pctBuf[8];
+    snprintf(pctBuf, sizeof(pctBuf), "%u%%", static_cast<unsigned>(percent));
+    tft.drawString(pctBuf, kCx, 110);
+    tft.setTextColor(COL_WHITE, COL_BG);
+    tft.setFont(&fonts::Font2);
+    tft.drawString(statusLine, kCx, 145);
+    return;
+  }
+
+  spr.fillSprite(COL_BG);
+  spr.drawCircle(kCx, kCy, 115, COL_RING_DIM);
+  spr.drawCircle(kCx, kCy, 107, COL_RADAR_DIM);
+  if (percent > 0) {
+    drawThickArc(kCx, kCy, 111.0f, 0.0f, static_cast<float>(percent) * 3.6f, COL_CYAN, 7);
+  }
+
+  spr.fillRoundRect(64, 42, 112, 24, 12, COL_PANEL);
+  spr.drawRoundRect(64, 42, 112, 24, 12, COL_PANEL_EDGE);
+  spr.setTextDatum(lgfx::middle_center);
+  spr.setTextColor(COL_AMBER, COL_PANEL);
+  drawText("OTA UPDATE", kCx, 54, &fonts::Font2);
+
+  char pctBuf[8];
+  snprintf(pctBuf, sizeof(pctBuf), "%u%%", static_cast<unsigned>(percent));
+  spr.setTextColor(COL_WHITE, COL_BG);
+  drawText(pctBuf, kCx, 116, &fonts::Font4);
+
+  spr.fillRoundRect(42, 162, 156, 26, 13, COL_PANEL);
+  spr.drawRoundRect(42, 162, 156, 26, 13, COL_PANEL_EDGE);
+  spr.setTextColor(COL_CYAN, COL_PANEL);
+  drawText(statusLine, kCx, 175, &fonts::Font2);
 
   spr.pushSprite(0, 0);
 }

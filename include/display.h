@@ -9,6 +9,7 @@ namespace Display {
   void setBrightness(uint8_t brightness);
   void showBootScreen(const char* statusLine);
   void showPortalScreen(const char* apSsid, const char* apIp);
+  void showOtaScreen(uint8_t percent, const char* statusLine);
   void renderClockWeather(const AppConfig& cfg,
                           const WeatherData& weather,
                           bool wifiOk,

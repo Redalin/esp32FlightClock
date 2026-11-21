@@ -1,4 +1,5 @@
 #include <Arduino.h>
+#include <ArduinoOTA.h>
 #include <ESPmDNS.h>
 #include <WiFi.h>
 #include <time.h>
@@ -23,6 +24,54 @@ unsigned long lastFlightPollMs = 0;
 unsigned long lastRenderMs = 0;
 unsigned long testFlightUntilMs = 0;
 bool weatherFetchedOnce = false;
+bool otaInitialized = false;
+bool otaInProgress = false;
+
+void setupOta() {
+  if (!otaInitialized) {
+    otaInitialized = true;
+    ArduinoOTA.setHostname(MDNS_HOSTNAME);
+    ArduinoOTA.setMdnsEnabled(false); // mDNS is managed in setupNetwork()
+#ifdef OTA_PASSWORD
+    ArduinoOTA.setPassword(OTA_PASSWORD);
+#endif
+    ArduinoOTA.onStart([]() {
+      otaInProgress = true;
+      digitalWrite(LED_PIN, LOW);
+      Serial.println("[OTA] Start updating firmware");
+      Display::showOtaScreen(0, "Starting OTA...");
+    });
+    ArduinoOTA.onProgress([](unsigned int progress, unsigned int total) {
+      static uint8_t lastShownPct = 255;
+      uint8_t pct = (total > 0) ? static_cast<uint8_t>((progress * 100U) / total) : 0;
+      if (pct != lastShownPct && (pct == 0 || pct == 100 || (pct % 2) == 0)) {
+        lastShownPct = pct;
+        Display::showOtaScreen(pct, "Flashing...");
+      }
+    });
+    ArduinoOTA.onEnd([]() {
+      Serial.println("\n[OTA] Complete, rebooting...");
+      Display::showOtaScreen(100, "Rebooting...");
+      delay(300);
+    });
+    ArduinoOTA.onError([](ota_error_t error) {
+      otaInProgress = false;
+      digitalWrite(LED_PIN, HIGH);
+      const char* errText = "OTA Error";
+      if (error == OTA_AUTH_ERROR) errText = "Auth Failed";
+      else if (error == OTA_BEGIN_ERROR) errText = "Begin Failed";
+      else if (error == OTA_CONNECT_ERROR) errText = "Connect Failed";
+      else if (error == OTA_RECEIVE_ERROR) errText = "Receive Failed";
+      else if (error == OTA_END_ERROR) errText = "End Failed";
+      Serial.printf("[OTA] Error[%u]: %s\n", static_cast<unsigned>(error), errText);
+      Display::showOtaScreen(0, errText);
+      delay(1500);
+      lastRenderMs = 0;
+    });
+  }
+  ArduinoOTA.begin();
+  Serial.printf("[OTA] Ready on %s.local:3232\n", MDNS_HOSTNAME);
+}
 
 void applyTimezone() {
   configTzTime(cfg.timezone.c_str(), "pool.ntp.org", "time.nist.gov");
@@ -46,22 +95,47 @@ bool isQuietHours(const AppConfig& c, bool timeSynced) {
   return (h >= c.quietStartHour || h < c.quietEndHour);
 }
 
+void registerWifiEvents() {
+  static bool eventRegistered = false;
+  if (eventRegistered) {
+    return;
+  }
+  eventRegistered = true;
+  WiFi.onEvent([](WiFiEvent_t event, WiFiEventInfo_t info) {
+    switch (event) {
+      case ARDUINO_EVENT_WIFI_STA_DISCONNECTED:
+        Serial.printf("\n[WiFi] STA disconnected reason=%d\n",
+                      info.wifi_sta_disconnected.reason);
+        break;
+      case ARDUINO_EVENT_WIFI_AP_START:
+        Serial.println("[WiFi] AP_START");
+        break;
+      case ARDUINO_EVENT_WIFI_AP_STOP:
+        Serial.println("[WiFi] AP_STOP");
+        break;
+      case ARDUINO_EVENT_WIFI_AP_STACONNECTED:
+        Serial.println("[WiFi] AP client connected");
+        break;
+      case ARDUINO_EVENT_WIFI_AP_STAIPASSIGNED:
+        Serial.printf("[WiFi] AP client IP: %s\n",
+                      IPAddress(info.wifi_ap_staipassigned.ip.addr).toString().c_str());
+        break;
+      case ARDUINO_EVENT_WIFI_AP_STADISCONNECTED:
+        Serial.println("[WiFi] AP client disconnected");
+        break;
+      default:
+        break;
+    }
+  });
+}
+
 bool connectWifiSta(uint32_t timeoutMs = 15000) {
   if (cfg.wifiSsid.isEmpty()) {
     Serial.println("[WiFi] No SSID configured.");
     return false;
   }
 
-  static bool eventRegistered = false;
-  if (!eventRegistered) {
-    eventRegistered = true;
-    WiFi.onEvent([](WiFiEvent_t event, WiFiEventInfo_t info) {
-      if (event == ARDUINO_EVENT_WIFI_STA_DISCONNECTED) {
-        Serial.printf("\n[WiFi] Disconnected reason=%d\n",
-                      info.wifi_sta_disconnected.reason);
-      }
-    });
-  }
+  registerWifiEvents();
 
   Serial.printf("[WiFi] Joining \"%s\" (passLen=%u) ",
                 cfg.wifiSsid.c_str(),
@@ -72,7 +146,7 @@ bool connectWifiSta(uint32_t timeoutMs = 15000) {
   WiFi.mode(WIFI_STA);
   WiFi.setHostname(MDNS_HOSTNAME);
   WiFi.setSleep(false); // Keep RX active for reliable mDNS multicast
-  WiFi.setTxPower(WIFI_POWER_11dBm); // Prevents RF brownout on ESP32-C3 Super Mini
+  WiFi.setTxPower(WIFI_POWER_5dBm); // Prevents RF brownout on ESP32-C3 Super Mini
   WiFi.begin(cfg.wifiSsid.c_str(), cfg.wifiPass.c_str());
 
   unsigned long start = millis();
@@ -92,7 +166,10 @@ bool connectWifiSta(uint32_t timeoutMs = 15000) {
 
   Serial.printf("[WiFi] Connection failed (status=%d). Scanning 2.4GHz...\n",
                 static_cast<int>(WiFi.status()));
+  WiFi.disconnect(false);
+  delay(100);
   int n = WiFi.scanNetworks();
+  Serial.printf("[WiFi] Scan found %d networks\n", n);
   for (int i = 0; i < n && i < 8; ++i) {
     Serial.printf("  - \"%s\" ch=%d rssi=%d\n",
                   WiFi.SSID(i).c_str(),
@@ -104,13 +181,27 @@ bool connectWifiSta(uint32_t timeoutMs = 15000) {
 }
 
 void startApPortal() {
+  registerWifiEvents();
+  WiFi.persistent(false);
+  WiFi.setAutoReconnect(false);
+  WiFi.disconnect(true);
+  WiFi.mode(WIFI_OFF);
+  delay(200);
+
   WiFi.mode(WIFI_AP);
-  WiFi.softAP(AP_SSID);
+  WiFi.setSleep(false);
+  WiFi.softAPConfig(IPAddress(192, 168, 4, 1),
+                    IPAddress(192, 168, 4, 1),
+                    IPAddress(255, 255, 255, 0));
+  bool apOk = WiFi.softAP(AP_SSID, nullptr, 1, 0, 4);
+  WiFi.setTxPower(WIFI_POWER_5dBm); // Prevents RF distortion/brownout on ESP32-C3 Super Mini
   netState.wifiConnected = false;
   netState.apMode = true;
-  Serial.printf("[WiFi] Started AP \"%s\" at http://%s\n",
+  Serial.printf("[WiFi] SoftAP \"%s\" %s at http://%s (txPower=%d)\n",
                 AP_SSID,
-                WiFi.softAPIP().toString().c_str());
+                apOk ? "started" : "FAILED",
+                WiFi.softAPIP().toString().c_str(),
+                static_cast<int>(WiFi.getTxPower()));
   Display::showPortalScreen(AP_SSID, WiFi.softAPIP().toString().c_str());
 }
 
@@ -122,10 +213,16 @@ void setupNetwork() {
     if (MDNS.begin(MDNS_HOSTNAME)) {
       MDNS.setInstanceName("ESP32 Flight Clock");
       MDNS.addService("http", "tcp", 80);
-      Serial.printf("[mDNS] http://%s.local (HTTP service registered)\n", MDNS_HOSTNAME);
+#ifdef OTA_PASSWORD
+      MDNS.enableArduino(3232, true);
+#else
+      MDNS.enableArduino(3232, false);
+#endif
+      Serial.printf("[mDNS] http://%s.local (HTTP + OTA registered)\n", MDNS_HOSTNAME);
     } else {
       Serial.println("[mDNS] Failed to start responder");
     }
+    setupOta();
     applyTimezone();
     Serial.printf("[NTP] Syncing time (TZ=%s)\n", cfg.timezone.c_str());
     Display::showBootScreen("Syncing time...");
@@ -180,6 +277,14 @@ void setup() {
 }
 
 void loop() {
+  if (netState.wifiConnected) {
+    ArduinoOTA.handle();
+    if (otaInProgress) {
+      delay(2);
+      return;
+    }
+  }
+
   PortalServer::loop();
 
   if (netState.rebootRequested) {

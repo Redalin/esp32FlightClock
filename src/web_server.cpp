@@ -4,6 +4,7 @@
 #include "web_ui.h"
 #include <ArduinoJson.h>
 #include <DNSServer.h>
+#include <Update.h>
 #include <WebServer.h>
 #include <WiFi.h>
 #include <time.h>
@@ -182,21 +183,75 @@ void handleStatus() {
     doc["flight"] = "None in range";
   }
 
+  doc["firmware"] = __DATE__ " " __TIME__;
+
   String out;
   serializeJson(doc, out);
   server.send(200, "application/json", out);
 }
 
 void handleScan() {
+  if (gState && gState->apMode && WiFi.getMode() == WIFI_AP) {
+    WiFi.enableSTA(true);
+    WiFi.setAutoReconnect(false);
+    WiFi.disconnect(false);
+    delay(50);
+  }
+
   int n = WiFi.scanNetworks();
-  JsonDocument doc;
-  JsonArray arr = doc.to<JsonArray>();
-  for (int i = 0; i < n && i < 20; ++i) {
-    JsonObject obj = arr.add<JsonObject>();
-    obj["ssid"] = WiFi.SSID(i);
-    obj["rssi"] = WiFi.RSSI(i);
+  if (gState && gState->apMode) {
+    WiFi.setTxPower(WIFI_POWER_5dBm);
+  }
+
+  struct NetEntry {
+    String ssid;
+    int32_t rssi;
+  };
+  NetEntry entries[20];
+  int count = 0;
+
+  for (int i = 0; i < n; ++i) {
+    String ssid = WiFi.SSID(i);
+    if (ssid.isEmpty()) continue;
+    int32_t rssi = WiFi.RSSI(i);
+
+    int existing = -1;
+    for (int j = 0; j < count; ++j) {
+      if (entries[j].ssid == ssid) {
+        existing = j;
+        break;
+      }
+    }
+    if (existing >= 0) {
+      if (rssi > entries[existing].rssi) {
+        entries[existing].rssi = rssi;
+      }
+    } else if (count < 20) {
+      entries[count].ssid = ssid;
+      entries[count].rssi = rssi;
+      ++count;
+    }
   }
   WiFi.scanDelete();
+
+  // Sort by strongest RSSI first
+  for (int i = 0; i < count; ++i) {
+    for (int j = i + 1; j < count; ++j) {
+      if (entries[j].rssi > entries[i].rssi) {
+        NetEntry tmp = entries[i];
+        entries[i] = entries[j];
+        entries[j] = tmp;
+      }
+    }
+  }
+
+  JsonDocument doc;
+  JsonArray arr = doc.to<JsonArray>();
+  for (int i = 0; i < count; ++i) {
+    JsonObject obj = arr.add<JsonObject>();
+    obj["ssid"] = entries[i].ssid;
+    obj["rssi"] = entries[i].rssi;
+  }
 
   String out;
   serializeJson(doc, out);
@@ -211,6 +266,97 @@ void handleTestFlight() {
 void handleReboot() {
   gState->rebootRequested = true;
   server.send(200, "application/json", "{\"ok\":true}");
+}
+
+bool otaUploadOk = false;
+String otaErrorMsg;
+size_t otaExpectedSize = 0;
+size_t otaWritten = 0;
+uint8_t otaLastPct = 255;
+
+void handleOtaUpload() {
+  HTTPUpload& upload = server.upload();
+
+  if (upload.status == UPLOAD_FILE_START) {
+    otaUploadOk = false;
+    otaErrorMsg = "";
+    otaWritten = 0;
+    otaLastPct = 255;
+    otaExpectedSize = static_cast<size_t>(server.arg("size").toInt());
+
+    Serial.printf("[WebOTA] Start: %s (expected=%u bytes)\n",
+                  upload.filename.c_str(),
+                  static_cast<unsigned>(otaExpectedSize));
+    digitalWrite(LED_PIN, LOW);
+    Display::showOtaScreen(0, "Web OTA...");
+
+    size_t updateSize = (otaExpectedSize > 0) ? otaExpectedSize : UPDATE_SIZE_UNKNOWN;
+    if (!Update.begin(updateSize, U_FLASH)) {
+      otaErrorMsg = Update.errorString();
+      Serial.printf("[WebOTA] begin failed: %s\n", otaErrorMsg.c_str());
+    }
+  } else if (upload.status == UPLOAD_FILE_WRITE) {
+    if (otaErrorMsg.isEmpty()) {
+      size_t written = Update.write(upload.buf, upload.currentSize);
+      if (written != upload.currentSize) {
+        otaErrorMsg = Update.errorString();
+        Serial.printf("[WebOTA] write failed: %s\n", otaErrorMsg.c_str());
+      } else {
+        otaWritten += written;
+        if (otaExpectedSize > 0) {
+          uint8_t pct = static_cast<uint8_t>((otaWritten * 100ULL) / otaExpectedSize);
+          if (pct > 100) pct = 100;
+          if (pct != otaLastPct && (pct == 100 || (pct % 2) == 0)) {
+            otaLastPct = pct;
+            Display::showOtaScreen(pct, "Flashing...");
+          }
+        } else if ((otaWritten / 32768U) != otaLastPct) {
+          otaLastPct = static_cast<uint8_t>(otaWritten / 32768U);
+          Display::showOtaScreen(50, "Flashing...");
+        }
+      }
+    }
+  } else if (upload.status == UPLOAD_FILE_END) {
+    if (otaErrorMsg.isEmpty()) {
+      if (Update.end(true)) {
+        otaUploadOk = true;
+        Serial.printf("[WebOTA] Success (%u bytes). Rebooting...\n",
+                      static_cast<unsigned>(otaWritten));
+        Display::showOtaScreen(100, "Rebooting...");
+      } else {
+        otaErrorMsg = Update.errorString();
+        Serial.printf("[WebOTA] end failed: %s\n", otaErrorMsg.c_str());
+      }
+    }
+    if (!otaUploadOk) {
+      digitalWrite(LED_PIN, HIGH);
+      Display::showOtaScreen(0, "OTA Failed");
+    }
+  } else if (upload.status == UPLOAD_FILE_ABORTED) {
+    Update.abort();
+    otaUploadOk = false;
+    otaErrorMsg = "Upload aborted";
+    digitalWrite(LED_PIN, HIGH);
+    Serial.println("[WebOTA] Upload aborted");
+    Display::showOtaScreen(0, "OTA Aborted");
+  }
+}
+
+void handleOtaDone() {
+  if (otaUploadOk) {
+    server.sendHeader("Connection", "close");
+    server.send(200, "application/json",
+                "{\"ok\":true,\"message\":\"Firmware updated! Rebooting ESP32...\"}");
+    gState->rebootRequested = true;
+  } else {
+    JsonDocument doc;
+    doc["ok"] = false;
+    doc["message"] = otaErrorMsg.length() ? ("Update failed: " + otaErrorMsg) : "Update failed";
+    String out;
+    serializeJson(doc, out);
+    server.sendHeader("Connection", "close");
+    server.send(500, "application/json", out);
+  }
 }
 
 void handleNotFound() {
@@ -242,6 +388,7 @@ void begin(AppConfig& cfg,
   server.on("/api/scan", HTTP_GET, handleScan);
   server.on("/api/test-flight", HTTP_POST, handleTestFlight);
   server.on("/api/reboot", HTTP_POST, handleReboot);
+  server.on("/api/ota", HTTP_POST, handleOtaDone, handleOtaUpload);
   server.onNotFound(handleNotFound);
 
   if (state.apMode && !dnsRunning) {

@@ -29,15 +29,31 @@ Pin mappings are configured in [include/config.h](include/config.h) using **Lovy
 
 1. Install [PlatformIO](https://platformio.org/) (VS Code extension or `pio` CLI).
 2. *(Optional)* Create a `.env` file in the project root to pre-populate defaults at compile time (`WIFI_SSID`, `WIFI_PASS`, `TIMEZONE`, `LATITUDE`, `LONGITUDE`, `ADSB_LOL_API_KEY`).
-3. Connect your ESP32-C3 Super Mini via USB-C.
-4. Build and flash:
+3. Connect your ESP32-C3 Super Mini via USB-C (needed once to flash the initial OTA-enabled firmware and partition table).
+4. Build and flash over USB:
    ```bash
-   pio run -t upload
+   pio run -e esp32-c3-supermini -t upload
    ```
 5. (Optional) Open serial monitor:
    ```bash
    pio device monitor -b 115200
    ```
+
+### Over-The-Air (OTA) Firmware Updates
+
+Once the device is connected to your Wi-Fi network, you can update the firmware wirelessly in either of two ways:
+
+- **PlatformIO CLI (`espota`)**:
+  ```bash
+  pio run -e esp32-c3-supermini-ota -t upload
+  ```
+  By default this targets `flightclock.local`. You can optionally set `OTA_HOST` (an IP address, if mDNS isn't resolved on your network) and `OTA_PASSWORD` in `.env`.
+- **Web UI Upload**:
+  1. Build the binary with `pio run -e esp32-c3-supermini`.
+  2. Open **`http://flightclock.local`** (or the device's IP) in your browser.
+  3. Under **Firmware Update (OTA)**, select `.pio/build/esp32-c3-supermini/firmware.bin` and click **Upload Firmware**.
+
+Both methods show a live circular progress ring on the round TFT screen and automatically reboot into the new firmware.
 
 ---
 
