@@ -35,6 +35,7 @@ void load(AppConfig& cfg) {
 
   cfg.wifiSsid = prefs.getString("ssid", defaultSsid);
   cfg.wifiPass = prefs.getString("pass", defaultPass);
+  cfg.wifiTxPowerDbm = clampWifiTxPowerDbm(prefs.getFloat("txPwr", 5.0f));
   cfg.latitude = prefs.getDouble("lat", 0.0);
   cfg.longitude = prefs.getDouble("lon", 0.0);
   cfg.locationConfigured = prefs.getBool("locSet", false);
@@ -69,6 +70,7 @@ void save(const AppConfig& cfg) {
 
   prefs.putString("ssid", cfg.wifiSsid);
   prefs.putString("pass", cfg.wifiPass);
+  prefs.putFloat("txPwr", clampWifiTxPowerDbm(cfg.wifiTxPowerDbm));
   prefs.putDouble("lat", cfg.latitude);
   prefs.putDouble("lon", cfg.longitude);
   prefs.putBool("locSet", cfg.locationConfigured);

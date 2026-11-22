@@ -49,9 +49,10 @@ Once the device is connected to your Wi-Fi network, you can update the firmware 
   ```
   By default this targets `flightclock.local`. You can optionally set `OTA_HOST` (an IP address, if mDNS isn't resolved on your network) and `OTA_PASSWORD` in `.env`.
 - **Web UI Upload**:
-  1. Build the binary with `pio run -e esp32-c3-supermini`.
-  2. Open **`http://flightclock.local`** (or the device's IP) in your browser.
-  3. Under **Firmware Update (OTA)**, select `.pio/build/esp32-c3-supermini/firmware.bin` and click **Upload Firmware**.
+  1. *(Optional)* Bump `FW_VERSION` in [include/config.h](include/config.h) for each release.
+  2. Build the binary with `pio run -e esp32-c3-supermini` (outputs `.pio/build/esp32-c3-supermini/firmware_v<FW_VERSION>.bin`).
+  3. Open **`http://flightclock.local`** (or the device's IP) in your browser.
+  4. Under **Firmware Update (OTA)**, select `.pio/build/esp32-c3-supermini/firmware_v<FW_VERSION>.bin` and click **Upload Firmware**.
 
 Both methods show a live circular progress ring on the round TFT screen and automatically reboot into the new firmware.
 

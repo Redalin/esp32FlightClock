@@ -21,6 +21,7 @@ const char WEB_UI_HTML[] PROGMEM = R"rawliteral(<!DOCTYPE html>
       --danger: #f87171;
       --danger-bg: rgba(248, 113, 113, 0.14);
       --ok: #4ade80;
+      --slider-track: #73859e;
     }
     @media (prefers-color-scheme: light) {
       :root {
@@ -34,6 +35,7 @@ const char WEB_UI_HTML[] PROGMEM = R"rawliteral(<!DOCTYPE html>
         --danger: #dc2626;
         --danger-bg: #fef2f2;
         --ok: #16a34a;
+        --slider-track: #768599;
       }
     }
     * { box-sizing: border-box; }
@@ -48,9 +50,26 @@ const char WEB_UI_HTML[] PROGMEM = R"rawliteral(<!DOCTYPE html>
     main {
       max-width: 36rem;
       margin: 0 auto;
+      padding-bottom: 5.5rem;
       display: flex;
       flex-direction: column;
-      gap: 1.25rem;
+      gap: 1rem;
+    }
+    .page-header {
+      display: flex;
+      flex-wrap: wrap;
+      justify-content: space-between;
+      align-items: flex-start;
+      gap: 0.75rem;
+    }
+    .btn-compact {
+      min-height: 40px;
+      padding: 0.4rem 0.75rem;
+      font-size: 0.875rem;
+    }
+    [data-toggle-cards][aria-expanded="true"] .expand,
+    [data-toggle-cards][aria-expanded="false"] .collapse {
+      display: none;
     }
     h1 {
       margin: 0;
@@ -62,17 +81,75 @@ const char WEB_UI_HTML[] PROGMEM = R"rawliteral(<!DOCTYPE html>
       color: var(--muted);
       font-size: 0.95rem;
     }
-    .card, fieldset {
+    .card, details.card-details {
       background: var(--card);
       border: 1px solid var(--border);
       border-radius: 0.75rem;
-      padding: 1.125rem;
       margin: 0;
     }
-    legend {
+    .card {
+      padding: 1.125rem;
+    }
+    details.card-details {
+      margin-bottom: 1rem;
+    }
+    details.card-details:last-of-type {
+      margin-bottom: 0;
+    }
+    details.card-details > summary {
+      list-style: none;
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+      padding: 0.95rem 1.125rem;
       font-weight: 700;
-      padding: 0 0.5rem;
+      font-size: 1.02rem;
       color: var(--accent);
+      cursor: pointer;
+      border-radius: 0.75rem;
+      user-select: none;
+    }
+    details.card-details > summary::-webkit-details-marker {
+      display: none;
+    }
+    details.card-details > summary::before {
+      content: "";
+      inline-size: 1em;
+      block-size: 1em;
+      flex-shrink: 0;
+      background-color: currentColor;
+      -webkit-mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath fill='black' d='M3.2 5.7a.75.75 0 0 1 1.06 0L8 9.44l3.74-3.74a.75.75 0 1 1 1.06 1.06l-4.27 4.27a.75.75 0 0 1-1.06 0L3.2 6.76a.75.75 0 0 1 0-1.06Z'/%3E%3C/svg%3E") no-repeat center / contain;
+      mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath fill='black' d='M3.2 5.7a.75.75 0 0 1 1.06 0L8 9.44l3.74-3.74a.75.75 0 1 1 1.06 1.06l-4.27 4.27a.75.75 0 0 1-1.06 0L3.2 6.76a.75.75 0 0 1 0-1.06Z'/%3E%3C/svg%3E") no-repeat center / contain;
+      rotate: -90deg;
+    }
+    details.card-details[open] > summary::before {
+      rotate: 0deg;
+    }
+    details.card-details > summary:focus-visible {
+      outline: 3px solid var(--accent);
+      outline-offset: 2px;
+    }
+    details.card-details::details-content {
+      interpolate-size: allow-keywords;
+      overflow: clip;
+      contain: layout;
+    }
+    details.card-details:not([open])::details-content {
+      block-size: 0;
+    }
+    @media (prefers-reduced-motion: no-preference) {
+      details.card-details > summary::before {
+        transition: rotate 0.2s ease;
+      }
+      details.card-details::details-content {
+        transition: block-size, content-visibility, display;
+        transition-duration: 0.25s;
+        transition-timing-function: ease-in-out;
+        transition-behavior: allow-discrete;
+      }
+    }
+    .card-body {
+      padding: 0 1.125rem 1.125rem;
     }
     .status-grid {
       display: grid;
@@ -186,15 +263,108 @@ const char WEB_UI_HTML[] PROGMEM = R"rawliteral(<!DOCTYPE html>
       gap: 0.75rem;
     }
     .actions button { flex: 1 1 10rem; }
-    .banner {
+    .toast-region {
+      position: fixed;
+      inset: 0.75rem 0.75rem auto 0.75rem;
+      pointer-events: none;
+      z-index: 60;
+      display: flex;
+      justify-content: center;
+    }
+    .toast {
+      pointer-events: auto;
+      display: none;
+      align-items: center;
+      justify-content: space-between;
+      gap: 0.75rem;
+      width: min(36rem, calc(100vw - 1.5rem));
       padding: 0.75rem 1rem;
-      border-radius: 0.5rem;
-      border: 1px solid var(--border);
+      border-radius: 0.75rem;
+      border: 1.5px solid var(--border);
+      background: var(--card);
+      color: var(--text);
+      box-shadow: 0 10px 28px rgba(0, 0, 0, 0.35);
+      margin: 0;
+    }
+    .toast[popover] {
+      position: fixed;
+      inset: 0.75rem 0.75rem auto 0.75rem;
+      margin: 0 auto;
+    }
+    .toast.show,
+    .toast[popover]:is(:popover-open, .\:popover-open) {
+      display: flex;
+    }
+    .toast.ok { border-color: var(--ok); }
+    .toast.err { border-color: var(--danger); }
+    .toast-msg {
+      flex: 1;
+      min-width: 0;
+      font-weight: 600;
+      word-break: break-word;
+    }
+    .toast.ok .toast-msg { color: var(--ok); }
+    .toast.err .toast-msg { color: var(--danger); }
+    .toast-close {
+      min-height: 36px;
+      padding: 0.25rem 0.65rem;
+      font-size: 0.875rem;
+      flex-shrink: 0;
+    }
+    @media (prefers-reduced-motion: no-preference) {
+      .toast[popover] {
+        opacity: 0;
+        transform: translateY(-0.5rem);
+        transition: opacity 0.2s ease, transform 0.2s ease, display 0.2s, overlay 0.2s;
+        transition-behavior: allow-discrete;
+      }
+      .toast[popover]:is(:popover-open, .\:popover-open) {
+        opacity: 1;
+        transform: translateY(0);
+      }
+      @starting-style {
+        .toast[popover]:popover-open {
+          opacity: 0;
+          transform: translateY(-0.5rem);
+        }
+      }
+    }
+    .floating-bar {
+      position: fixed;
+      inset: auto 0 0 0;
+      z-index: 40;
+      padding: 0.75rem 1rem;
+      background: var(--card);
+      border-top: 1.5px solid var(--accent);
+      box-shadow: 0 -8px 24px rgba(0, 0, 0, 0.32);
+    }
+    .floating-bar[hidden] {
       display: none;
     }
-    .banner.show { display: block; }
-    .banner.ok { border-color: var(--ok); color: var(--ok); }
-    .banner.err { border-color: var(--danger); color: var(--danger); }
+    .floating-bar-inner {
+      max-width: 36rem;
+      margin: 0 auto;
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      justify-content: space-between;
+      gap: 0.75rem;
+    }
+    .floating-bar-label {
+      font-weight: 600;
+      font-size: 0.95rem;
+      color: var(--accent);
+    }
+    .floating-bar-actions {
+      display: flex;
+      gap: 0.5rem;
+      flex: 1 1 14rem;
+      justify-content: flex-end;
+    }
+    .floating-bar-actions button {
+      min-height: 44px;
+      flex: 1 1 auto;
+    }
     progress {
       width: 100%;
       height: 0.75rem;
@@ -206,6 +376,96 @@ const char WEB_UI_HTML[] PROGMEM = R"rawliteral(<!DOCTYPE html>
       background: var(--bg);
       color: var(--text);
       border: 1.5px dashed var(--border);
+    }
+    .range-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: baseline;
+      gap: 0.5rem;
+    }
+    .range-value {
+      font-weight: 700;
+      font-variant-numeric: tabular-nums;
+      color: var(--accent);
+    }
+    input[type="range"] {
+      --slider-track-size: 0.5rem;
+      --slider-thumb-size: 1.25rem;
+      --slider-track-radius: 999px;
+      --slider-thumb-radius: 50%;
+      --slider-track-color: var(--slider-track);
+      --slider-fill-color: var(--accent);
+      --slider-thumb-color: var(--slider-fill-color);
+      --slider-direction: to right;
+      --attr-min: attr(min type(<number>), 5);
+      --attr-max: attr(max type(<number>), 20);
+      --control-value: attr(value type(<number>), 5);
+      --slider-progress: calc(
+        progress(var(--control-value), var(--attr-min), var(--attr-max)) * 100%
+      );
+
+      appearance: none;
+      inline-size: 100%;
+      block-size: 3rem;
+      margin: 0;
+      padding: 0;
+      border: 0;
+      border-radius: 0.5rem;
+      background: transparent;
+      cursor: pointer;
+    }
+    input[type="range"]:dir(rtl) {
+      --slider-direction: to left;
+    }
+    @supports not (opacity: progress(1, 0, 100)) {
+      input[type="range"] {
+        --slider-progress: calc(
+          (var(--control-value) - var(--attr-min)) /
+          (var(--attr-max) - var(--attr-min)) * 100%
+        );
+      }
+    }
+    input[type="range"]::-webkit-slider-runnable-track {
+      block-size: var(--slider-track-size);
+      border: 0;
+      border-radius: var(--slider-track-radius);
+      background: linear-gradient(
+        var(--slider-direction),
+        var(--slider-fill-color) var(--slider-progress),
+        var(--slider-track-color) var(--slider-progress)
+      );
+    }
+    input[type="range"]::-webkit-slider-thumb {
+      -webkit-appearance: none;
+      appearance: none;
+      inline-size: var(--slider-thumb-size);
+      block-size: var(--slider-thumb-size);
+      margin-block-start: calc((var(--slider-track-size) - var(--slider-thumb-size)) / 2);
+      border: 0;
+      border-radius: var(--slider-thumb-radius);
+      background: var(--slider-thumb-color);
+    }
+    input[type="range"]::-moz-range-track {
+      block-size: var(--slider-track-size);
+      border: 0;
+      border-radius: var(--slider-track-radius);
+      background: var(--slider-track-color);
+    }
+    input[type="range"]::-moz-range-progress {
+      block-size: var(--slider-track-size);
+      border-radius: var(--slider-track-radius);
+      background: var(--slider-fill-color);
+    }
+    input[type="range"]::-moz-range-thumb {
+      inline-size: var(--slider-thumb-size);
+      block-size: var(--slider-thumb-size);
+      border: 0;
+      border-radius: var(--slider-thumb-radius);
+      background: var(--slider-thumb-color);
+    }
+    input[type="range"]:focus-visible {
+      outline: 2px solid var(--slider-fill-color);
+      outline-offset: 4px;
     }
     .visually-hidden {
       position: absolute;
@@ -222,32 +482,39 @@ const char WEB_UI_HTML[] PROGMEM = R"rawliteral(<!DOCTYPE html>
 </head>
 <body>
   <main>
-    <header>
-      <h1>ESP32 Flight Clock</h1>
-      <p class="subtitle">1.28&Prime; Round TFT &bull; Time, Weather &amp; Overhead Flight Radar</p>
+    <header class="page-header">
+      <div>
+        <h1>ESP32 Flight Clock</h1>
+        <p class="subtitle">1.28&Prime; Round TFT &bull; Time, Weather &amp; Overhead Flight Radar</p>
+      </div>
+      <button type="button" id="btn-toggle-cards" class="btn-compact" data-toggle-cards aria-expanded="true">
+        <span class="expand">Expand all</span>
+        <span class="collapse">Collapse all</span>
+      </button>
     </header>
 
-    <section class="card" aria-labelledby="status-heading">
-      <h2 id="status-heading" style="margin:0 0 0.75rem;font-size:1.1rem;">Live Status</h2>
-      <div class="status-grid">
-        <div class="stat"><span class="stat-label">Wi-Fi / IP</span><span class="stat-val" id="st-wifi">Loading...</span></div>
-        <div class="stat"><span class="stat-label">Local Time</span><span class="stat-val" id="st-time">--:--</span></div>
-        <div class="stat"><span class="stat-label">Weather</span><span class="stat-val" id="st-weather">--</span></div>
-        <div class="stat"><span class="stat-label">Overhead Flight</span><span class="stat-val" id="st-flight">None in range</span></div>
+    <details class="card-details" open>
+      <summary>Live Status</summary>
+      <div class="card-body">
+        <div class="status-grid">
+          <div class="stat"><span class="stat-label">Wi-Fi / IP</span><span class="stat-val" id="st-wifi">Loading...</span></div>
+          <div class="stat"><span class="stat-label">Local Time</span><span class="stat-val" id="st-time">--:--</span></div>
+          <div class="stat"><span class="stat-label">Weather</span><span class="stat-val" id="st-weather">--</span></div>
+          <div class="stat"><span class="stat-label">Overhead Flight</span><span class="stat-val" id="st-flight">None in range</span></div>
+        </div>
+        <div class="actions" style="margin-top:0.875rem;">
+          <button type="button" id="btn-test-flight">Test Flight Screen</button>
+          <button type="button" id="btn-refresh">Refresh Status</button>
+        </div>
       </div>
-      <div class="actions" style="margin-top:0.875rem;">
-        <button type="button" id="btn-test-flight">Test Flight Screen</button>
-        <button type="button" id="btn-refresh">Refresh Status</button>
-      </div>
-    </section>
-
-    <div id="save-banner" class="banner" role="status" aria-live="polite"></div>
+    </details>
 
     <form id="config-form" method="POST" action="/api/config" aria-labelledby="form-heading" novalidate>
       <h2 id="form-heading" class="visually-hidden">Device Configuration</h2>
 
-      <fieldset style="margin-bottom:1.25rem;">
-        <legend>Wi-Fi Connectivity</legend>
+      <details class="card-details" open>
+        <summary>Wi-Fi Connectivity</summary>
+        <div class="card-body">
 
         <div class="field">
           <label for="wifiSsid">Wi-Fi Network (SSID) <span aria-hidden="true">*</span></label>
@@ -273,10 +540,22 @@ const char WEB_UI_HTML[] PROGMEM = R"rawliteral(<!DOCTYPE html>
             <button type="button" id="btn-toggle-pass" aria-pressed="false" aria-label="Show password">Show</button>
           </div>
         </div>
-      </fieldset>
 
-      <fieldset style="margin-bottom:1.25rem;">
-        <legend>GPS Location</legend>
+        <div class="field">
+          <div class="range-header">
+            <label for="wifiTxPowerDbm">Wi-Fi TX Power</label>
+            <output for="wifiTxPowerDbm" id="txPower-val" class="range-value">5.0 dBm</output>
+          </div>
+          <span id="txpower-hint" class="hint">Transmit power from 5.0 to 20.0 dBm (0.5 dBm steps). Default 5.0 dBm prevents RF brownout on ESP32-C3 Super Mini; increase if signal is weak.</span>
+          <input type="range" id="wifiTxPowerDbm" name="wifiTxPowerDbm" min="5" max="20" step="0.5" value="5"
+            aria-describedby="txpower-hint" aria-valuetext="5.0 dBm">
+        </div>
+        </div>
+      </details>
+
+      <details class="card-details" open>
+        <summary>GPS Location</summary>
+        <div class="card-body">
 
         <div class="field">
           <label for="latitude">Latitude <span aria-hidden="true">*</span></label>
@@ -301,10 +580,12 @@ const char WEB_UI_HTML[] PROGMEM = R"rawliteral(<!DOCTYPE html>
         </div>
 
         <button type="button" id="btn-geo">Use Browser GPS</button>
-      </fieldset>
+        </div>
+      </details>
 
-      <fieldset style="margin-bottom:1.25rem;">
-        <legend>Time &amp; Display</legend>
+      <details class="card-details" open>
+        <summary>Time &amp; Display</summary>
+        <div class="card-body">
 
         <div class="field">
           <label for="tzPreset">Timezone Preset</label>
@@ -355,10 +636,12 @@ const char WEB_UI_HTML[] PROGMEM = R"rawliteral(<!DOCTYPE html>
           <input type="checkbox" id="useImperialDist" name="useImperialDist" value="true">
           <label for="useImperialDist">Use aviation/imperial flight units (ft, kt, mi)</label>
         </div>
-      </fieldset>
+        </div>
+      </details>
 
-      <fieldset style="margin-bottom:1.25rem;">
-        <legend>Flight Radar</legend>
+      <details class="card-details" open>
+        <summary>Flight Radar</summary>
+        <div class="card-body">
 
         <div class="field">
           <label for="searchRadiusKm">Detection Radius (km) <span aria-hidden="true">*</span></label>
@@ -412,36 +695,62 @@ const char WEB_UI_HTML[] PROGMEM = R"rawliteral(<!DOCTYPE html>
               aria-label="Quiet end hour" aria-describedby="quiet-hint">
           </div>
         </div>
-      </fieldset>
+        </div>
+      </details>
 
-      <div class="actions">
+      <div class="actions" style="margin-top:1rem;">
         <button type="submit" id="btn-save" class="primary">Save &amp; Apply</button>
         <button type="button" id="btn-reboot">Reboot ESP32</button>
       </div>
     </form>
 
-    <section class="card" aria-labelledby="ota-heading">
-      <h2 id="ota-heading" style="margin:0 0 0.5rem;font-size:1.1rem;">Firmware Update (OTA)</h2>
-      <p class="hint" style="margin:0 0 0.875rem;">
-        Current build: <strong id="st-fw">--</strong>. Upload a compiled <code>firmware.bin</code> file to update wirelessly, or run <code>pio run -e esp32-c3-supermini-ota -t upload</code>.
-      </p>
-      <div class="field">
-        <label for="ota-file">Firmware Binary (.bin)</label>
-        <input type="file" id="ota-file" accept=".bin,application/octet-stream">
+    <details class="card-details" open>
+      <summary>Firmware Update (OTA)</summary>
+      <div class="card-body">
+        <p class="hint" style="margin:0 0 0.875rem;">
+          Current build: <strong id="st-fw">--</strong>. Upload a compiled <code>firmware_v*.bin</code> file to update wirelessly, or run <code>pio run -e esp32-c3-supermini-ota -t upload</code>.
+        </p>
+        <div class="field">
+          <label for="ota-file">Firmware Binary (.bin)</label>
+          <input type="file" id="ota-file" accept=".bin,application/octet-stream">
+        </div>
+        <div class="field" id="ota-progress-wrap" hidden>
+          <progress id="ota-progress" max="100" value="0"></progress>
+          <span id="ota-status" class="hint" role="status" aria-live="polite"></span>
+        </div>
+        <div class="actions">
+          <button type="button" id="btn-ota">Upload Firmware</button>
+        </div>
       </div>
-      <div class="field" id="ota-progress-wrap" hidden>
-        <progress id="ota-progress" max="100" value="0"></progress>
-        <span id="ota-status" class="hint" role="status" aria-live="polite"></span>
-      </div>
-      <div class="actions">
-        <button type="button" id="btn-ota">Upload Firmware</button>
-      </div>
-    </section>
+    </details>
   </main>
+
+  <div role="region" aria-label="Notifications" class="toast-region">
+    <div id="save-toast" class="toast" popover="manual">
+      <span id="toast-msg" class="toast-msg"></span>
+      <button type="button" id="btn-toast-close" class="toast-close" popovertarget="save-toast" popovertargetaction="hide" aria-label="Dismiss notification">Close</button>
+    </div>
+  </div>
+  <div id="toast-live" class="visually-hidden" aria-live="polite" aria-atomic="true"></div>
+
+  <div id="unsaved-bar" class="floating-bar" role="region" aria-label="Unsaved changes" hidden>
+    <div class="floating-bar-inner">
+      <span class="floating-bar-label">Unsaved changes</span>
+      <div class="floating-bar-actions">
+        <button type="button" id="btn-cancel">Cancel</button>
+        <button type="submit" form="config-form" id="btn-float-save" class="primary">Save &amp; Apply</button>
+      </div>
+    </div>
+  </div>
 
   <script>
     const form = document.getElementById('config-form');
-    const banner = document.getElementById('save-banner');
+    const toast = document.getElementById('save-toast');
+    const toastMsg = document.getElementById('toast-msg');
+    const toastCloseBtn = document.getElementById('btn-toast-close');
+    const toastLive = document.getElementById('toast-live');
+    const unsavedBar = document.getElementById('unsaved-bar');
+    const supportsPopover = Object.hasOwn(HTMLElement.prototype, 'popover');
 
     // Consistent ARIA & :user-invalid fallback
     const linkError = (el, shown) => {
@@ -499,10 +808,162 @@ const char WEB_UI_HTML[] PROGMEM = R"rawliteral(<!DOCTYPE html>
       form.addEventListener('input', (e) => syncAria(e.target, false));
     }
 
-    const showBanner = (msg, ok) => {
-      banner.textContent = msg;
-      banner.className = 'banner show ' + (ok ? 'ok' : 'err');
+    // Viewport-fixed confirmation toast (Top Layer via popover="manual" with fixed fallback)
+    let toastTimer = null;
+    let toastAutoDismiss = false;
+    let lastFocusBeforeToast = null;
+
+    const isToastOpen = () => (supportsPopover ? toast.matches(':popover-open') : toast.classList.contains('show'));
+
+    const hideToast = () => {
+      clearTimeout(toastTimer);
+      toastTimer = null;
+      const hadFocus = toast.contains(document.activeElement);
+      if (supportsPopover) {
+        if (toast.matches(':popover-open')) toast.hidePopover();
+      } else {
+        toast.classList.remove('show');
+      }
+      if (hadFocus && lastFocusBeforeToast && typeof lastFocusBeforeToast.focus === 'function') {
+        lastFocusBeforeToast.focus();
+      }
     };
+
+    const scheduleToastDismiss = () => {
+      clearTimeout(toastTimer);
+      if (!toastAutoDismiss) return;
+      toastTimer = setTimeout(() => {
+        if (toast.contains(document.activeElement)) return;
+        hideToast();
+      }, 5000);
+    };
+
+    toast.addEventListener('focusin', () => clearTimeout(toastTimer));
+    toast.addEventListener('focusout', (e) => {
+      if (!toast.contains(e.relatedTarget) && isToastOpen()) scheduleToastDismiss();
+    });
+    if (supportsPopover) {
+      toast.addEventListener('toggle', (e) => {
+        if (e.newState === 'closed') {
+          clearTimeout(toastTimer);
+          toastTimer = null;
+        }
+      });
+      toastCloseBtn.addEventListener('click', () => {
+        setTimeout(() => {
+          if (lastFocusBeforeToast && typeof lastFocusBeforeToast.focus === 'function') {
+            lastFocusBeforeToast.focus();
+          }
+        }, 0);
+      });
+    } else {
+      toastCloseBtn.addEventListener('click', hideToast);
+    }
+
+    const showBanner = (msg, ok) => {
+      if (!toast.contains(document.activeElement)) {
+        lastFocusBeforeToast = document.activeElement;
+      }
+      toastMsg.textContent = msg;
+      toast.classList.remove('ok', 'err');
+      toast.classList.add(ok ? 'ok' : 'err');
+      toastAutoDismiss = !!ok;
+
+      if (supportsPopover) {
+        if (!toast.matches(':popover-open')) toast.showPopover();
+      } else {
+        toast.classList.add('show');
+      }
+
+      if (typeof document.ariaNotify === 'function') {
+        document.ariaNotify(msg);
+      } else {
+        toastLive.textContent = '';
+        setTimeout(() => { toastLive.textContent = msg; }, 50);
+      }
+      scheduleToastDismiss();
+    };
+
+    // Expand / Collapse all cards
+    const toggleCardsBtn = document.getElementById('btn-toggle-cards');
+    const getCardDetails = () => Array.from(document.querySelectorAll('details.card-details'));
+    const syncToggleCardsBtn = () => {
+      const allOpen = getCardDetails().every((d) => d.open);
+      toggleCardsBtn.setAttribute('aria-expanded', String(allOpen));
+    };
+    toggleCardsBtn.addEventListener('click', () => {
+      const shouldOpen = toggleCardsBtn.getAttribute('aria-expanded') !== 'true';
+      getCardDetails().forEach((d) => { d.open = shouldOpen; });
+      syncToggleCardsBtn();
+    });
+    document.addEventListener('toggle', (e) => {
+      if (e.target instanceof HTMLDetailsElement && e.target.classList.contains('card-details')) {
+        syncToggleCardsBtn();
+      }
+    }, { capture: true });
+
+    // Unsaved-changes tracking for floating Save / Cancel bar
+    const trackedTextFields = [
+      'wifiSsid', 'wifiPass', 'wifiTxPowerDbm', 'latitude', 'longitude',
+      'timezone', 'brightness', 'searchRadiusKm', 'flightPollSec',
+      'maxAltitudeFt', 'flightSource', 'quietStartHour', 'quietEndHour'
+    ];
+    const trackedBoolFields = [
+      'use24Hour', 'useFahrenheit', 'useImperialDist', 'quietHoursEnabled'
+    ];
+    let savedSnapshot = null;
+
+    const captureConfigSnapshot = () => {
+      const snap = {};
+      trackedTextFields.forEach((id) => {
+        const el = document.getElementById(id);
+        snap[id] = el ? el.value : '';
+      });
+      trackedBoolFields.forEach((id) => {
+        const el = document.getElementById(id);
+        snap[id] = !!(el && el.checked);
+      });
+      return snap;
+    };
+
+    const isFormDirty = () => {
+      if (!savedSnapshot) return false;
+      const cur = captureConfigSnapshot();
+      for (const k of trackedTextFields) {
+        if (cur[k] !== savedSnapshot[k]) return true;
+      }
+      for (const k of trackedBoolFields) {
+        if (cur[k] !== savedSnapshot[k]) return true;
+      }
+      return false;
+    };
+
+    const updateDirtyState = () => {
+      unsavedBar.hidden = !isFormDirty();
+    };
+
+    form.addEventListener('input', updateDirtyState);
+    form.addEventListener('change', updateDirtyState);
+
+    document.getElementById('btn-cancel').addEventListener('click', () => {
+      if (!savedSnapshot) return;
+      trackedTextFields.forEach((id) => {
+        const el = document.getElementById(id);
+        if (el) {
+          el.value = savedSnapshot[id];
+          el.classList.remove('user-invalid-fallback');
+          syncAria(el, false);
+        }
+      });
+      trackedBoolFields.forEach((id) => {
+        const el = document.getElementById(id);
+        if (el) el.checked = !!savedSnapshot[id];
+      });
+      document.getElementById('tzPreset').value = '';
+      syncTxPowerSlider();
+      updateDirtyState();
+      showBanner('Changes discarded.', true);
+    });
 
     // Password toggle
     const passInput = document.getElementById('wifiPass');
@@ -514,12 +975,28 @@ const char WEB_UI_HTML[] PROGMEM = R"rawliteral(<!DOCTYPE html>
       togglePassBtn.textContent = showing ? 'Show' : 'Hide';
     });
 
+    // Wi-Fi TX Power slider sync
+    const txPowerInput = document.getElementById('wifiTxPowerDbm');
+    const txPowerOut = document.getElementById('txPower-val');
+    function syncTxPowerSlider() {
+      const val = parseFloat(txPowerInput.value);
+      const formatted = `${Number.isFinite(val) ? val.toFixed(1) : '5.0'} dBm`;
+      txPowerInput.style.setProperty('--attr-min', txPowerInput.min || 5);
+      txPowerInput.style.setProperty('--attr-max', txPowerInput.max || 20);
+      txPowerInput.style.setProperty('--control-value', txPowerInput.value);
+      txPowerInput.setAttribute('aria-valuetext', formatted);
+      txPowerOut.textContent = formatted;
+    }
+    syncTxPowerSlider();
+    txPowerInput.addEventListener('input', syncTxPowerSlider);
+
     // Timezone preset helper
     document.getElementById('tzPreset').addEventListener('change', (e) => {
       if (e.target.value) {
         const tz = document.getElementById('timezone');
         tz.value = e.target.value;
         syncAria(tz, false);
+        updateDirtyState();
       }
     });
 
@@ -533,6 +1010,7 @@ const char WEB_UI_HTML[] PROGMEM = R"rawliteral(<!DOCTYPE html>
         (pos) => {
           document.getElementById('latitude').value = pos.coords.latitude.toFixed(5);
           document.getElementById('longitude').value = pos.coords.longitude.toFixed(5);
+          updateDirtyState();
           showBanner('Coordinates filled from browser GPS. Click Save & Apply.', true);
         },
         (err) => {
@@ -549,6 +1027,7 @@ const char WEB_UI_HTML[] PROGMEM = R"rawliteral(<!DOCTYPE html>
         const ssidInput = document.getElementById('wifiSsid');
         ssidInput.value = e.target.value;
         syncAria(ssidInput, false);
+        updateDirtyState();
         document.getElementById('wifiPass').focus();
       }
     });
@@ -607,6 +1086,8 @@ const char WEB_UI_HTML[] PROGMEM = R"rawliteral(<!DOCTYPE html>
         const res = await fetch('/api/config');
         const c = await res.json();
         document.getElementById('wifiSsid').value = c.wifiSsid || '';
+        txPowerInput.value = c.wifiTxPowerDbm ?? 5;
+        syncTxPowerSlider();
         document.getElementById('latitude').value = c.locationConfigured ? c.latitude : '';
         document.getElementById('longitude').value = c.locationConfigured ? c.longitude : '';
         document.getElementById('timezone').value = c.timezone || 'UTC0';
@@ -621,7 +1102,12 @@ const char WEB_UI_HTML[] PROGMEM = R"rawliteral(<!DOCTYPE html>
         document.getElementById('quietHoursEnabled').checked = c.quietHoursEnabled !== false;
         document.getElementById('quietStartHour').value = c.quietStartHour ?? 1;
         document.getElementById('quietEndHour').value = c.quietEndHour ?? 6;
-      } catch {}
+        savedSnapshot = captureConfigSnapshot();
+        updateDirtyState();
+      } catch {
+        savedSnapshot = captureConfigSnapshot();
+        updateDirtyState();
+      }
     }
 
     document.getElementById('btn-refresh').addEventListener('click', loadStatus);
@@ -704,17 +1190,22 @@ const char WEB_UI_HTML[] PROGMEM = R"rawliteral(<!DOCTYPE html>
         const firstInvalid = form.querySelector(':invalid');
         form.querySelectorAll('input, select').forEach((el) => {
           if (!el.validity.valid) {
+            const parentCard = el.closest('details.card-details');
+            if (parentCard) parentCard.open = true;
             el.classList.add('user-invalid-fallback');
             syncAria(el, false);
           }
         });
+        syncToggleCardsBtn();
         if (firstInvalid) firstInvalid.focus();
         showBanner('Please fix the highlighted fields before saving.', false);
         return;
       }
 
       const saveBtn = document.getElementById('btn-save');
+      const floatSaveBtn = document.getElementById('btn-float-save');
       saveBtn.disabled = true;
+      floatSaveBtn.disabled = true;
       const body = new URLSearchParams(new FormData(form));
       // Ensure unchecked checkboxes are explicitly sent as false
       ['use24Hour', 'useFahrenheit', 'useImperialDist', 'quietHoursEnabled'].forEach((k) => {
@@ -725,11 +1216,17 @@ const char WEB_UI_HTML[] PROGMEM = R"rawliteral(<!DOCTYPE html>
         const res = await fetch('/api/config', { method: 'POST', body });
         const json = await res.json();
         showBanner(json.message || 'Settings saved!', res.ok);
+        if (res.ok) {
+          passInput.value = '';
+          savedSnapshot = captureConfigSnapshot();
+          updateDirtyState();
+        }
         loadStatus();
       } catch {
         showBanner('Failed to save settings.', false);
       } finally {
         saveBtn.disabled = false;
+        floatSaveBtn.disabled = false;
       }
     });
 

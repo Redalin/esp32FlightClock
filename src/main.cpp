@@ -146,7 +146,7 @@ bool connectWifiSta(uint32_t timeoutMs = 15000) {
   WiFi.mode(WIFI_STA);
   WiFi.setHostname(MDNS_HOSTNAME);
   WiFi.setSleep(false); // Keep RX active for reliable mDNS multicast
-  WiFi.setTxPower(WIFI_POWER_5dBm); // Prevents RF brownout on ESP32-C3 Super Mini
+  applyWifiTxPower(cfg.wifiTxPowerDbm);
   WiFi.begin(cfg.wifiSsid.c_str(), cfg.wifiPass.c_str());
 
   unsigned long start = millis();
@@ -194,7 +194,7 @@ void startApPortal() {
                     IPAddress(192, 168, 4, 1),
                     IPAddress(255, 255, 255, 0));
   bool apOk = WiFi.softAP(AP_SSID, nullptr, 1, 0, 4);
-  WiFi.setTxPower(WIFI_POWER_5dBm); // Prevents RF distortion/brownout on ESP32-C3 Super Mini
+  applyWifiTxPower(cfg.wifiTxPowerDbm);
   netState.wifiConnected = false;
   netState.apMode = true;
   Serial.printf("[WiFi] SoftAP \"%s\" %s at http://%s (txPower=%d)\n",
@@ -259,7 +259,7 @@ void setup() {
 
   Serial.begin(115200);
   delay(800); // Allow USB-CDC host to attach
-  Serial.println("\n=== ESP32-C3 Flight Clock ===");
+  Serial.println("\n=== ESP32-C3 Flight Clock v" FW_VERSION " ===");
 
   Storage::load(cfg);
   Serial.printf("[Cfg] SSID=\"%s\" GPS=%s (%.4f, %.4f) TZ=%s\n",

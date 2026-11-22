@@ -398,6 +398,9 @@ void showBootScreen(const char* statusLine) {
   spr.setTextColor(COL_CYAN, COL_PANEL);
   drawText(statusLine, kCx, 153, &fonts::Font2);
 
+  spr.setTextColor(COL_MUTED, COL_BG);
+  drawText("v" FW_VERSION, kCx, 184, &fonts::Font0);
+
   spr.pushSprite(0, 0);
 }
 
@@ -605,8 +608,11 @@ void renderClockWeather(const AppConfig& cfg,
     drawText("Fetching weather...", kCx, 162, &fonts::Font2);
   }
 
-  // Bottom Wi-Fi icon
-  drawWifiIcon(kCx, 222, wifiOk);
+  // Bottom Wi-Fi icon + firmware version
+  drawWifiIcon(96, 222, wifiOk);
+  spr.setTextDatum(lgfx::middle_left);
+  spr.setTextColor(COL_MUTED, COL_BG);
+  drawText("v" FW_VERSION, 108, 222, &fonts::Font0);
 
   spr.pushSprite(0, 0);
 }

@@ -1,5 +1,14 @@
 import os
+import re
 Import("env")
+
+
+def read_fw_version(config_path):
+    if not os.path.isfile(config_path):
+        return None
+    with open(config_path, "r", encoding="utf-8") as f:
+        match = re.search(r'#define\s+FW_VERSION\s+"([^"]+)"', f.read())
+    return match.group(1).strip() if match else None
 
 
 def parse_env_file(path):
@@ -21,6 +30,12 @@ def parse_env_file(path):
 
 
 project_dir = env.subst("$PROJECT_DIR")
+
+fw_version = read_fw_version(os.path.join(project_dir, "include", "config.h"))
+if fw_version:
+    safe_ver = re.sub(r"[^0-9A-Za-z._-]", "_", fw_version)
+    env.Replace(PROGNAME=f"firmware_v{safe_ver}")
+
 env_vars = {}
 for candidate in (
     os.path.join(project_dir, ".env"),

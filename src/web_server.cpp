@@ -31,6 +31,7 @@ void handleRoot() {
 void handleGetConfig() {
   JsonDocument doc;
   doc["wifiSsid"] = gCfg->wifiSsid;
+  doc["wifiTxPowerDbm"] = gCfg->wifiTxPowerDbm;
   doc["latitude"] = gCfg->latitude;
   doc["longitude"] = gCfg->longitude;
   doc["locationConfigured"] = gCfg->locationConfigured;
@@ -74,6 +75,14 @@ void handlePostConfig() {
     gCfg->wifiPass = newPass;
   } else if (ssidChanged) {
     gCfg->wifiPass = "";
+  }
+
+  if (server.hasArg("wifiTxPowerDbm")) {
+    float txPwr = server.arg("wifiTxPowerDbm").toFloat();
+    if (txPwr >= 5.0f && txPwr <= 20.0f) {
+      gCfg->wifiTxPowerDbm = clampWifiTxPowerDbm(txPwr);
+      applyWifiTxPower(gCfg->wifiTxPowerDbm);
+    }
   }
 
   gCfg->latitude = lat;
@@ -183,7 +192,8 @@ void handleStatus() {
     doc["flight"] = "None in range";
   }
 
-  doc["firmware"] = __DATE__ " " __TIME__;
+  doc["version"] = FW_VERSION;
+  doc["firmware"] = "v" FW_VERSION " (" __DATE__ " " __TIME__ ")";
 
   String out;
   serializeJson(doc, out);
@@ -200,7 +210,7 @@ void handleScan() {
 
   int n = WiFi.scanNetworks();
   if (gState && gState->apMode) {
-    WiFi.setTxPower(WIFI_POWER_5dBm);
+    applyWifiTxPower(gCfg->wifiTxPowerDbm);
   }
 
   struct NetEntry {
