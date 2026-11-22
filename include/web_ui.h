@@ -218,7 +218,8 @@ const char WEB_UI_HTML[] PROGMEM = R"rawliteral(<!DOCTYPE html>
       margin-top: 0.2rem;
     }
     :is(input:user-invalid, select:user-invalid, .user-invalid-fallback) + .error-msg,
-    .input-row:has(:is(input:user-invalid, .user-invalid-fallback)) + .error-msg {
+    .input-row:has(:is(input:user-invalid, .user-invalid-fallback)) + .error-msg,
+    .offset-panel:has(:is(input:user-invalid, .user-invalid-fallback)) + .error-msg {
       display: block;
     }
     .input-row {
@@ -364,6 +365,47 @@ const char WEB_UI_HTML[] PROGMEM = R"rawliteral(<!DOCTYPE html>
     .floating-bar-actions button {
       min-height: 44px;
       flex: 1 1 auto;
+    }
+    .offset-panel {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 1rem;
+      margin-top: 0.35rem;
+    }
+    .dpad {
+      display: grid;
+      grid-template-columns: repeat(3, 3rem);
+      grid-template-rows: repeat(3, 3rem);
+      gap: 0.35rem;
+    }
+    .dpad button {
+      min-height: 0;
+      padding: 0;
+      display: grid;
+      place-items: center;
+      font-size: 1.1rem;
+    }
+    .dpad-up { grid-column: 2; grid-row: 1; }
+    .dpad-left { grid-column: 1; grid-row: 2; }
+    .dpad-center { grid-column: 2; grid-row: 2; font-size: 0.8rem !important; color: var(--muted); }
+    .dpad-right { grid-column: 3; grid-row: 2; }
+    .dpad-down { grid-column: 2; grid-row: 3; }
+    .offset-coords {
+      display: flex;
+      gap: 0.5rem;
+      flex: 1 1 10rem;
+    }
+    .offset-coord {
+      flex: 1;
+      min-width: 0;
+      display: flex;
+      flex-direction: column;
+      gap: 0.2rem;
+    }
+    .offset-coord label {
+      font-size: 0.82rem;
+      color: var(--muted);
     }
     progress {
       width: 100%;
@@ -621,6 +663,35 @@ const char WEB_UI_HTML[] PROGMEM = R"rawliteral(<!DOCTYPE html>
             aria-describedby="bright-error" data-error="bright-error">
           <div id="bright-error" class="error-msg">
             <span role="img" aria-label="Error">&#10060;</span> Enter a brightness between 20 and 255.
+          </div>
+        </div>
+
+        <div class="field">
+          <label>Screen Position Offset (px)</label>
+          <span id="offset-hint" class="hint">Nudge the image 1 px at a time (&minus;30 to +30) to align with your case. Previews live on screen; save to keep after reboot.</span>
+          <div class="offset-panel">
+            <div class="dpad" role="group" aria-label="Move screen position">
+              <button type="button" class="dpad-up" data-dx="0" data-dy="-1" aria-label="Move up 1 pixel">&#9650;</button>
+              <button type="button" class="dpad-left" data-dx="-1" data-dy="0" aria-label="Move left 1 pixel">&#9664;</button>
+              <button type="button" class="dpad-center" id="btn-pos-reset" aria-label="Reset screen position to 0, 0">0,0</button>
+              <button type="button" class="dpad-right" data-dx="1" data-dy="0" aria-label="Move right 1 pixel">&#9654;</button>
+              <button type="button" class="dpad-down" data-dx="0" data-dy="1" aria-label="Move down 1 pixel">&#9660;</button>
+            </div>
+            <div class="offset-coords">
+              <div class="offset-coord">
+                <label for="displayOffsetX">X (Left / Right)</label>
+                <input type="number" id="displayOffsetX" name="displayOffsetX" min="-30" max="30" step="1" value="0" required
+                  aria-describedby="offset-hint" data-error="offset-error">
+              </div>
+              <div class="offset-coord">
+                <label for="displayOffsetY">Y (Up / Down)</label>
+                <input type="number" id="displayOffsetY" name="displayOffsetY" min="-30" max="30" step="1" value="0" required
+                  aria-describedby="offset-hint" data-error="offset-error">
+              </div>
+            </div>
+          </div>
+          <div id="offset-error" class="error-msg">
+            <span role="img" aria-label="Error">&#10060;</span> Enter X and Y offsets between -30 and 30 pixels.
           </div>
         </div>
 
@@ -905,7 +976,8 @@ const char WEB_UI_HTML[] PROGMEM = R"rawliteral(<!DOCTYPE html>
     // Unsaved-changes tracking for floating Save / Cancel bar
     const trackedTextFields = [
       'wifiSsid', 'wifiPass', 'wifiTxPowerDbm', 'latitude', 'longitude',
-      'timezone', 'brightness', 'searchRadiusKm', 'flightPollSec',
+      'timezone', 'brightness', 'displayOffsetX', 'displayOffsetY',
+      'searchRadiusKm', 'flightPollSec',
       'maxAltitudeFt', 'flightSource', 'quietStartHour', 'quietEndHour'
     ];
     const trackedBoolFields = [
@@ -961,8 +1033,51 @@ const char WEB_UI_HTML[] PROGMEM = R"rawliteral(<!DOCTYPE html>
       });
       document.getElementById('tzPreset').value = '';
       syncTxPowerSlider();
+      previewDisplayOffset();
       updateDirtyState();
       showBanner('Changes discarded.', true);
+    });
+
+    // Live screen position offset nudging
+    const offXInput = document.getElementById('displayOffsetX');
+    const offYInput = document.getElementById('displayOffsetY');
+    const clampOff = (v) => Math.max(-30, Math.min(30, Math.trunc(Number(v) || 0)));
+
+    function previewDisplayOffset() {
+      const x = clampOff(offXInput.value);
+      const y = clampOff(offYInput.value);
+      const body = new URLSearchParams({ x: String(x), y: String(y) });
+      fetch('/api/display-offset', { method: 'POST', body }).catch(() => {});
+    }
+
+    document.querySelectorAll('.dpad button[data-dx]').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        const dx = parseInt(btn.dataset.dx, 10) || 0;
+        const dy = parseInt(btn.dataset.dy, 10) || 0;
+        offXInput.value = String(clampOff(offXInput.value) + dx);
+        offYInput.value = String(clampOff(offYInput.value) + dy);
+        offXInput.value = String(clampOff(offXInput.value));
+        offYInput.value = String(clampOff(offYInput.value));
+        syncAria(offXInput, false);
+        syncAria(offYInput, false);
+        previewDisplayOffset();
+        updateDirtyState();
+      });
+    });
+
+    document.getElementById('btn-pos-reset').addEventListener('click', () => {
+      offXInput.value = '0';
+      offYInput.value = '0';
+      syncAria(offXInput, false);
+      syncAria(offYInput, false);
+      previewDisplayOffset();
+      updateDirtyState();
+    });
+
+    [offXInput, offYInput].forEach((el) => {
+      el.addEventListener('change', () => {
+        if (el.validity.valid) previewDisplayOffset();
+      });
     });
 
     // Password toggle
@@ -1092,6 +1207,8 @@ const char WEB_UI_HTML[] PROGMEM = R"rawliteral(<!DOCTYPE html>
         document.getElementById('longitude').value = c.locationConfigured ? c.longitude : '';
         document.getElementById('timezone').value = c.timezone || 'UTC0';
         document.getElementById('brightness').value = c.brightness ?? 220;
+        offXInput.value = c.displayOffsetX ?? 0;
+        offYInput.value = c.displayOffsetY ?? 0;
         document.getElementById('use24Hour').checked = !!c.use24Hour;
         document.getElementById('useFahrenheit').checked = !!c.useFahrenheit;
         document.getElementById('useImperialDist').checked = !!c.useImperialDist;

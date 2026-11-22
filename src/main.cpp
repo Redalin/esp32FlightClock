@@ -270,6 +270,7 @@ void setup() {
                 cfg.timezone.c_str());
 
   Display::init(cfg.brightness);
+  Display::setOffset(cfg.displayOffsetX, cfg.displayOffsetY);
   Serial.println("[Display] GC9A01 initialized");
   Display::showBootScreen("Starting up...");
 

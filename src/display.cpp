@@ -64,6 +64,8 @@ public:
 LGFX tft;
 LGFX_Sprite spr(&tft);
 bool spriteReady = false;
+int16_t screenOffsetX = 0;
+int16_t screenOffsetY = 0;
 
 // Palette tuned for clean 8-bit (RGB332) sprite quantization
 constexpr uint16_t COL_BG         = 0x0000; // Pure black
@@ -110,6 +112,22 @@ enum class ScreenMode : uint8_t {
 };
 
 ScreenMode activeScreen = ScreenMode::NONE;
+
+void pushFrame() {
+  tft.startWrite();
+  if (screenOffsetX > 0) {
+    tft.fillRect(0, 0, screenOffsetX, 240, COL_BG);
+  } else if (screenOffsetX < 0) {
+    tft.fillRect(240 + screenOffsetX, 0, -screenOffsetX, 240, COL_BG);
+  }
+  if (screenOffsetY > 0) {
+    tft.fillRect(0, 0, 240, screenOffsetY, COL_BG);
+  } else if (screenOffsetY < 0) {
+    tft.fillRect(0, 240 + screenOffsetY, 240, -screenOffsetY, COL_BG);
+  }
+  spr.pushSprite(screenOffsetX, screenOffsetY);
+  tft.endWrite();
+}
 
 void drawThickArc(int cx, int cy, float r, float startDeg, float endDeg,
                   uint16_t color, int thickness) {
@@ -368,6 +386,19 @@ void setBrightness(uint8_t brightness) {
   tft.setBrightness(brightness);
 }
 
+void setOffset(int8_t offsetX, int8_t offsetY) {
+  int16_t nx = clampDisplayOffset(offsetX);
+  int16_t ny = clampDisplayOffset(offsetY);
+  if (nx == screenOffsetX && ny == screenOffsetY) {
+    return;
+  }
+  screenOffsetX = nx;
+  screenOffsetY = ny;
+  if (spriteReady && activeScreen != ScreenMode::NONE) {
+    pushFrame();
+  }
+}
+
 void showBootScreen(const char* statusLine) {
   activeScreen = ScreenMode::BOOT;
   if (!spriteReady) {
@@ -401,7 +432,7 @@ void showBootScreen(const char* statusLine) {
   spr.setTextColor(COL_MUTED, COL_BG);
   drawText("v" FW_VERSION, kCx, 184, &fonts::Font0);
 
-  spr.pushSprite(0, 0);
+  pushFrame();
 }
 
 void showPortalScreen(const char* apSsid, const char* apIp) {
@@ -433,7 +464,7 @@ void showPortalScreen(const char* apSsid, const char* apIp) {
   spr.setTextColor(COL_CYAN, COL_PANEL);
   drawText(apIp, kCx, 171, &fonts::Font4);
 
-  spr.pushSprite(0, 0);
+  pushFrame();
 }
 
 void showOtaScreen(uint8_t percent, const char* statusLine) {
@@ -477,7 +508,7 @@ void showOtaScreen(uint8_t percent, const char* statusLine) {
   spr.setTextColor(COL_CYAN, COL_PANEL);
   drawText(statusLine, kCx, 175, &fonts::Font2);
 
-  spr.pushSprite(0, 0);
+  pushFrame();
 }
 
 void renderClockWeather(const AppConfig& cfg,
@@ -614,7 +645,7 @@ void renderClockWeather(const AppConfig& cfg,
   spr.setTextColor(COL_MUTED, COL_BG);
   drawText("v" FW_VERSION, 108, 222, &fonts::Font0);
 
-  spr.pushSprite(0, 0);
+  pushFrame();
 }
 
 void renderFlightScreen(const AppConfig& cfg, const FlightInfo& flight) {
@@ -790,7 +821,7 @@ void renderFlightScreen(const AppConfig& cfg, const FlightInfo& flight) {
     drawText("Route N/A", kCx, 200, &fonts::Font2);
   }
 
-  spr.pushSprite(0, 0);
+  pushFrame();
 }
 
 } // namespace Display

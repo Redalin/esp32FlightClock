@@ -51,6 +51,8 @@ void load(AppConfig& cfg) {
   cfg.useFahrenheit = prefs.getBool("fahr", false);
   cfg.useImperialDist = prefs.getBool("imp", false);
   cfg.brightness = prefs.getUChar("bright", 220);
+  cfg.displayOffsetX = clampDisplayOffset(prefs.getChar("offX", 0));
+  cfg.displayOffsetY = clampDisplayOffset(prefs.getChar("offY", 0));
   cfg.searchRadiusKm = prefs.getFloat("radKm", 15.0f);
   cfg.flightPollSec = prefs.getUShort("fPoll", 15);
   cfg.maxAltitudeFt = prefs.getInt("maxAlt", 50000);
@@ -79,6 +81,8 @@ void save(const AppConfig& cfg) {
   prefs.putBool("fahr", cfg.useFahrenheit);
   prefs.putBool("imp", cfg.useImperialDist);
   prefs.putUChar("bright", cfg.brightness);
+  prefs.putChar("offX", clampDisplayOffset(cfg.displayOffsetX));
+  prefs.putChar("offY", clampDisplayOffset(cfg.displayOffsetY));
   prefs.putFloat("radKm", cfg.searchRadiusKm);
   prefs.putUShort("fPoll", cfg.flightPollSec);
   prefs.putInt("maxAlt", cfg.maxAltitudeFt);

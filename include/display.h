@@ -7,6 +7,7 @@
 namespace Display {
   void init(uint8_t brightness);
   void setBrightness(uint8_t brightness);
+  void setOffset(int8_t offsetX, int8_t offsetY);
   void showBootScreen(const char* statusLine);
   void showPortalScreen(const char* apSsid, const char* apIp);
   void showOtaScreen(uint8_t percent, const char* statusLine);

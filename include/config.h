@@ -6,7 +6,7 @@
 #include <math.h>
 
 // Firmware release version (bump for every release; also appended to the compiled .bin filename)
-#define FW_VERSION "1.0.2"
+#define FW_VERSION "1.0.3"
 
 // ESP32-C3 Super Mini onboard LED (active LOW)
 #ifndef LED_PIN
@@ -47,6 +47,8 @@ struct AppConfig {
   bool useFahrenheit = false;
   bool useImperialDist = false; // false = km & ft/m, true = mi & ft
   uint8_t brightness = 220;     // 20..255
+  int8_t displayOffsetX = 0;    // -30..30 px
+  int8_t displayOffsetY = 0;    // -30..30 px
 
   // Flight Radar
   float searchRadiusKm = 5.0f;
@@ -68,4 +70,10 @@ inline void applyWifiTxPower(float dbm) {
   float clamped = clampWifiTxPowerDbm(dbm);
   int8_t quarterDbm = static_cast<int8_t>(lroundf(clamped * 4.0f));
   esp_wifi_set_max_tx_power(quarterDbm);
+}
+
+inline int8_t clampDisplayOffset(int val) {
+  if (val < -30) return -30;
+  if (val > 30) return 30;
+  return static_cast<int8_t>(val);
 }

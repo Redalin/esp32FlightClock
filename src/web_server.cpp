@@ -40,6 +40,8 @@ void handleGetConfig() {
   doc["useFahrenheit"] = gCfg->useFahrenheit;
   doc["useImperialDist"] = gCfg->useImperialDist;
   doc["brightness"] = gCfg->brightness;
+  doc["displayOffsetX"] = gCfg->displayOffsetX;
+  doc["displayOffsetY"] = gCfg->displayOffsetY;
   doc["searchRadiusKm"] = gCfg->searchRadiusKm;
   doc["flightPollSec"] = gCfg->flightPollSec;
   doc["maxAltitudeFt"] = gCfg->maxAltitudeFt;
@@ -104,6 +106,14 @@ void handlePostConfig() {
     gCfg->brightness = static_cast<uint8_t>(bright);
     Display::setBrightness(gCfg->brightness);
   }
+
+  if (server.hasArg("displayOffsetX")) {
+    gCfg->displayOffsetX = clampDisplayOffset(server.arg("displayOffsetX").toInt());
+  }
+  if (server.hasArg("displayOffsetY")) {
+    gCfg->displayOffsetY = clampDisplayOffset(server.arg("displayOffsetY").toInt());
+  }
+  Display::setOffset(gCfg->displayOffsetX, gCfg->displayOffsetY);
 
   float rad = server.arg("searchRadiusKm").toFloat();
   if (rad >= 1.0f && rad <= 150.0f) {
@@ -273,6 +283,15 @@ void handleTestFlight() {
   server.send(200, "application/json", "{\"ok\":true}");
 }
 
+void handleDisplayOffset() {
+  int8_t ox = server.hasArg("x") ? clampDisplayOffset(server.arg("x").toInt()) : gCfg->displayOffsetX;
+  int8_t oy = server.hasArg("y") ? clampDisplayOffset(server.arg("y").toInt()) : gCfg->displayOffsetY;
+  Display::setOffset(ox, oy);
+  char buf[48];
+  snprintf(buf, sizeof(buf), "{\"ok\":true,\"x\":%d,\"y\":%d}", static_cast<int>(ox), static_cast<int>(oy));
+  server.send(200, "application/json", buf);
+}
+
 void handleReboot() {
   gState->rebootRequested = true;
   server.send(200, "application/json", "{\"ok\":true}");
@@ -397,6 +416,7 @@ void begin(AppConfig& cfg,
   server.on("/api/status", HTTP_GET, handleStatus);
   server.on("/api/scan", HTTP_GET, handleScan);
   server.on("/api/test-flight", HTTP_POST, handleTestFlight);
+  server.on("/api/display-offset", HTTP_POST, handleDisplayOffset);
   server.on("/api/reboot", HTTP_POST, handleReboot);
   server.on("/api/ota", HTTP_POST, handleOtaDone, handleOtaUpload);
   server.onNotFound(handleNotFound);
