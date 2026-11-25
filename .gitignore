@@ -4,3 +4,4 @@
 .vscode/launch.json
 .vscode/ipch
 .env
+include/web_ui_gz.h

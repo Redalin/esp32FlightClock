@@ -48,7 +48,8 @@ bool fetch(const AppConfig& cfg, WeatherData& out) {
 
   HTTPClient http;
   http.useHTTP10(true); // Avoid chunked transfer encoding on getStream()
-  http.setTimeout(10000);
+  http.setConnectTimeout(4000);
+  http.setTimeout(6000);
   if (!http.begin(client, url)) {
     Serial.println("[Weather] http.begin failed");
     return false;

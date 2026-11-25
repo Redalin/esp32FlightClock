@@ -1,7 +1,13 @@
 #include "web_server.h"
 #include "display.h"
 #include "storage.h"
+#if __has_include("web_ui_gz.h")
+#include "web_ui_gz.h"
+#define HAS_WEB_UI_GZ 1
+#else
 #include "web_ui.h"
+#define HAS_WEB_UI_GZ 0
+#endif
 #include <ArduinoJson.h>
 #include <DNSServer.h>
 #include <Update.h>
@@ -25,7 +31,22 @@ bool parseBool(const String& val) {
 }
 
 void handleRoot() {
+  static constexpr char kUiEtag[] = "\"" FW_VERSION "\"";
+  if (server.hasHeader("If-None-Match") && server.header("If-None-Match") == kUiEtag) {
+    server.send(304);
+    return;
+  }
+  server.sendHeader("ETag", kUiEtag);
+  server.sendHeader("Cache-Control", "public, max-age=3600");
+#if HAS_WEB_UI_GZ
+  server.sendHeader("Content-Encoding", "gzip");
+  server.send_P(200,
+                "text/html; charset=utf-8",
+                reinterpret_cast<const char*>(WEB_UI_HTML_GZ),
+                WEB_UI_HTML_GZ_LEN);
+#else
   server.send_P(200, "text/html; charset=utf-8", WEB_UI_HTML);
+#endif
 }
 
 void handleGetConfig() {
@@ -168,6 +189,7 @@ void handleStatus() {
   doc["wifiConnected"] = gState->wifiConnected;
   doc["ssid"] = gCfg->wifiSsid;
   doc["ip"] = gState->wifiConnected ? WiFi.localIP().toString() : WiFi.softAPIP().toString();
+  doc["rssi"] = gState->wifiConnected ? WiFi.RSSI() : 0;
 
   struct tm timeinfo;
   if (gState->timeSynced && getLocalTime(&timeinfo, 10)) {
@@ -218,7 +240,7 @@ void handleScan() {
     delay(50);
   }
 
-  int n = WiFi.scanNetworks();
+  int n = WiFi.scanNetworks(false, false, false, 120);
   if (gState && gState->apMode) {
     applyWifiTxPower(gCfg->wifiTxPowerDbm);
   }
@@ -307,6 +329,7 @@ void handleOtaUpload() {
   HTTPUpload& upload = server.upload();
 
   if (upload.status == UPLOAD_FILE_START) {
+    if (gState) gState->otaInProgress = true;
     otaUploadOk = false;
     otaErrorMsg = "";
     otaWritten = 0;
@@ -335,12 +358,12 @@ void handleOtaUpload() {
         if (otaExpectedSize > 0) {
           uint8_t pct = static_cast<uint8_t>((otaWritten * 100ULL) / otaExpectedSize);
           if (pct > 100) pct = 100;
-          if (pct != otaLastPct && (pct == 100 || (pct % 2) == 0)) {
+          if (pct != otaLastPct && (pct == 100 || (pct % 5) == 0)) {
             otaLastPct = pct;
             Display::showOtaScreen(pct, "Flashing...");
           }
-        } else if ((otaWritten / 32768U) != otaLastPct) {
-          otaLastPct = static_cast<uint8_t>(otaWritten / 32768U);
+        } else if ((otaWritten / 65536U) != otaLastPct) {
+          otaLastPct = static_cast<uint8_t>(otaWritten / 65536U);
           Display::showOtaScreen(50, "Flashing...");
         }
       }
@@ -358,11 +381,13 @@ void handleOtaUpload() {
       }
     }
     if (!otaUploadOk) {
+      if (gState) gState->otaInProgress = false;
       digitalWrite(LED_PIN, HIGH);
       Display::showOtaScreen(0, "OTA Failed");
     }
   } else if (upload.status == UPLOAD_FILE_ABORTED) {
     Update.abort();
+    if (gState) gState->otaInProgress = false;
     otaUploadOk = false;
     otaErrorMsg = "Upload aborted";
     digitalWrite(LED_PIN, HIGH);
@@ -420,6 +445,9 @@ void begin(AppConfig& cfg,
   server.on("/api/reboot", HTTP_POST, handleReboot);
   server.on("/api/ota", HTTP_POST, handleOtaDone, handleOtaUpload);
   server.onNotFound(handleNotFound);
+
+  static const char* kHeaderKeys[] = {"If-None-Match"};
+  server.collectHeaders(kHeaderKeys, 1);
 
   if (state.apMode && !dnsRunning) {
     dnsServer.start(53, "*", WiFi.softAPIP());

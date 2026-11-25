@@ -3,6 +3,9 @@
 #include <ESPmDNS.h>
 #include <WiFi.h>
 #include <esp_sleep.h>
+#include <freertos/FreeRTOS.h>
+#include <freertos/semphr.h>
+#include <freertos/task.h>
 #include <time.h>
 
 #include "config.h"
@@ -20,15 +23,55 @@ FlightInfo flight;
 FlightInfo testFlight;
 PortalServer::State netState;
 
-unsigned long lastWeatherPollMs = 0;
-unsigned long lastFlightPollMs = 0;
 unsigned long lastRenderMs = 0;
 unsigned long testFlightUntilMs = 0;
 unsigned long wifiDisconnectedSinceMs = 0;
-bool weatherFetchedOnce = false;
+unsigned long lastReconnectAttemptMs = 0;
 bool otaInitialized = false;
 bool otaInProgress = false;
 bool wokeFromDeepSleep = false;
+
+// FreeRTOS network polling synchronization
+SemaphoreHandle_t netMutex = nullptr;
+TaskHandle_t netTaskHandle = nullptr;
+AppConfig netCfg;
+WeatherData netWeatherResult;
+FlightInfo netFlightResult;
+bool netWeatherUpdated = false;
+bool netFlightUpdated = false;
+bool netFlightCleared = false;
+volatile bool netForceWeather = false;
+volatile bool netForceFlight = false;
+volatile bool netResetConn = false;
+volatile bool netWifiConnected = false;
+volatile bool netTimeSynced = false;
+volatile bool netOtaActive = false;
+volatile bool netSleepRequested = false;
+volatile bool netTaskPaused = true;
+volatile bool staGotIpEvent = false;
+
+void syncNetConfigSnapshot() {
+  if (netMutex && xSemaphoreTake(netMutex, pdMS_TO_TICKS(200)) == pdTRUE) {
+    netCfg = cfg;
+    xSemaphoreGive(netMutex);
+  }
+}
+
+void startMdns() {
+  MDNS.end();
+  if (MDNS.begin(MDNS_HOSTNAME)) {
+    MDNS.setInstanceName("ESP32 Flight Clock");
+    MDNS.addService("http", "tcp", 80);
+#ifdef OTA_PASSWORD
+    MDNS.enableArduino(3232, true);
+#else
+    MDNS.enableArduino(3232, false);
+#endif
+    Serial.printf("[mDNS] http://%s.local (HTTP + OTA registered)\n", MDNS_HOSTNAME);
+  } else {
+    Serial.println("[mDNS] Failed to start responder");
+  }
+}
 
 void setupOta() {
   if (!otaInitialized) {
@@ -40,6 +83,8 @@ void setupOta() {
 #endif
     ArduinoOTA.onStart([]() {
       otaInProgress = true;
+      netOtaActive = true;
+      netResetConn = true;
       digitalWrite(LED_PIN, LOW);
       Serial.println("[OTA] Start updating firmware");
       Display::showOtaScreen(0, "Starting OTA...");
@@ -47,7 +92,7 @@ void setupOta() {
     ArduinoOTA.onProgress([](unsigned int progress, unsigned int total) {
       static uint8_t lastShownPct = 255;
       uint8_t pct = (total > 0) ? static_cast<uint8_t>((progress * 100U) / total) : 0;
-      if (pct != lastShownPct && (pct == 0 || pct == 100 || (pct % 2) == 0)) {
+      if (pct != lastShownPct && (pct == 0 || pct == 100 || (pct % 5) == 0)) {
         lastShownPct = pct;
         Display::showOtaScreen(pct, "Flashing...");
       }
@@ -59,6 +104,7 @@ void setupOta() {
     });
     ArduinoOTA.onError([](ota_error_t error) {
       otaInProgress = false;
+      netOtaActive = false;
       digitalWrite(LED_PIN, HIGH);
       const char* errText = "OTA Error";
       if (error == OTA_AUTH_ERROR) errText = "Auth Failed";
@@ -77,7 +123,7 @@ void setupOta() {
 }
 
 void applyTimezone() {
-  configTzTime(cfg.timezone.c_str(), "pool.ntp.org", "time.nist.gov");
+  configTzTime(cfg.timezone.c_str(), "pool.ntp.org", "time.nist.gov", "time.cloudflare.com");
 }
 
 bool isQuietHours(const AppConfig& c, bool timeSynced) {
@@ -96,6 +142,15 @@ bool isQuietHours(const AppConfig& c, bool timeSynced) {
     return (h >= c.quietStartHour && h < c.quietEndHour);
   }
   return (h >= c.quietStartHour || h < c.quietEndHour);
+}
+
+void pauseNetTaskForShutdown(uint32_t maxWaitMs = 2000) {
+  netSleepRequested = true;
+  netResetConn = true;
+  unsigned long start = millis();
+  while (!netTaskPaused && (millis() - start) < maxWaitMs) {
+    delay(20);
+  }
 }
 
 void enterQuietDeepSleep() {
@@ -120,6 +175,7 @@ void enterQuietDeepSleep() {
                 static_cast<unsigned>(cfg.quietEndHour));
   Serial.flush();
 
+  pauseNetTaskForShutdown();
   digitalWrite(LED_PIN, HIGH); // Active LOW LED off
   Display::sleep();
   WiFi.disconnect(true);
@@ -128,6 +184,142 @@ void enterQuietDeepSleep() {
   uint64_t sleepUs = static_cast<uint64_t>(deltaSec) * 1000000ULL;
   esp_sleep_enable_timer_wakeup(sleepUs);
   esp_deep_sleep_start();
+}
+
+void netPollTask(void*) {
+  WeatherData localWeather;
+  bool weatherFetchedOnce = false;
+  unsigned long lastWeatherAttemptMs = 0;
+  unsigned long weatherNextIntervalMs = WEATHER_RETRY_MIN_MS;
+
+  unsigned long lastFlightPollMs = 0;
+  bool localFlightActive = false;
+  unsigned long localFlightLastSeenMs = 0;
+
+  for (;;) {
+    if (netSleepRequested || netOtaActive || !netWifiConnected) {
+      if (netResetConn) {
+        netResetConn = false;
+        Flights::resetConnection();
+      }
+      netTaskPaused = true;
+      vTaskDelay(pdMS_TO_TICKS(250));
+      continue;
+    }
+
+    netTaskPaused = false;
+    if (netResetConn) {
+      netResetConn = false;
+      Flights::resetConnection();
+    }
+
+    AppConfig localCfg;
+    if (netMutex && xSemaphoreTake(netMutex, pdMS_TO_TICKS(200)) == pdTRUE) {
+      localCfg = netCfg;
+      xSemaphoreGive(netMutex);
+    } else {
+      vTaskDelay(pdMS_TO_TICKS(250));
+      continue;
+    }
+
+    if (!localCfg.locationConfigured) {
+      vTaskDelay(pdMS_TO_TICKS(500));
+      continue;
+    }
+
+    unsigned long now = millis();
+
+    if (netForceWeather) {
+      netForceWeather = false;
+      weatherFetchedOnce = false;
+      lastWeatherAttemptMs = 0;
+      weatherNextIntervalMs = WEATHER_RETRY_MIN_MS;
+    }
+
+    if (lastWeatherAttemptMs == 0 || (now - lastWeatherAttemptMs) >= weatherNextIntervalMs) {
+      lastWeatherAttemptMs = now;
+      if (Weather::fetch(localCfg, localWeather)) {
+        weatherFetchedOnce = true;
+        weatherNextIntervalMs = WEATHER_POLL_INTERVAL_MS;
+        Serial.printf("[Weather] %.1f C, %s (RH %d%%)\n",
+                      localWeather.tempC,
+                      Weather::describeCode(localWeather.weatherCode),
+                      localWeather.humidity);
+        if (netMutex && xSemaphoreTake(netMutex, pdMS_TO_TICKS(200)) == pdTRUE) {
+          netWeatherResult = localWeather;
+          netWeatherUpdated = true;
+          xSemaphoreGive(netMutex);
+        }
+      } else {
+        if (weatherFetchedOnce && weatherNextIntervalMs >= WEATHER_POLL_INTERVAL_MS) {
+          weatherNextIntervalMs = WEATHER_RETRY_MIN_MS;
+        } else {
+          weatherNextIntervalMs *= 2UL;
+          if (weatherNextIntervalMs > WEATHER_RETRY_MAX_MS) {
+            weatherNextIntervalMs = WEATHER_RETRY_MAX_MS;
+          }
+        }
+        Serial.printf("[Weather] Fetch failed; retrying in %lus\n", weatherNextIntervalMs / 1000UL);
+      }
+    }
+
+    if (netSleepRequested || netOtaActive || !netWifiConnected) {
+      continue;
+    }
+
+    if (netForceFlight) {
+      netForceFlight = false;
+      lastFlightPollMs = 0;
+    }
+
+    now = millis();
+    if (isQuietHours(localCfg, netTimeSynced)) {
+      if (localFlightActive && (now - localFlightLastSeenMs) >= FLIGHT_HOLD_MS) {
+        localFlightActive = false;
+        if (netMutex && xSemaphoreTake(netMutex, pdMS_TO_TICKS(200)) == pdTRUE) {
+          netFlightCleared = true;
+          xSemaphoreGive(netMutex);
+        }
+        Serial.println("[Flight] Quiet hours active, returning to clock");
+      }
+    } else {
+      unsigned long flightIntervalMs = localFlightActive
+                                           ? FLIGHT_ACTIVE_POLL_MS
+                                           : (static_cast<unsigned long>(localCfg.flightPollSec) * 1000UL);
+      if (lastFlightPollMs == 0 || (now - lastFlightPollMs) >= flightIntervalMs) {
+        lastFlightPollMs = now;
+        FlightInfo latest;
+        if (Flights::fetchClosest(localCfg, latest)) {
+          if (latest.active) {
+            localFlightActive = true;
+            localFlightLastSeenMs = latest.lastSeenMs;
+            Serial.printf("[Flight] %s (%s) %s->%s alt=%ldft dist=%.1fkm\n",
+                          latest.callsign,
+                          latest.aircraftType,
+                          latest.origin[0] ? latest.origin : "?",
+                          latest.destination[0] ? latest.destination : "?",
+                          static_cast<long>(latest.altitudeFt),
+                          latest.distanceKm);
+            if (netMutex && xSemaphoreTake(netMutex, pdMS_TO_TICKS(200)) == pdTRUE) {
+              netFlightResult = latest;
+              netFlightUpdated = true;
+              netFlightCleared = false;
+              xSemaphoreGive(netMutex);
+            }
+          } else if (localFlightActive && (now - localFlightLastSeenMs) >= FLIGHT_HOLD_MS) {
+            localFlightActive = false;
+            if (netMutex && xSemaphoreTake(netMutex, pdMS_TO_TICKS(200)) == pdTRUE) {
+              netFlightCleared = true;
+              xSemaphoreGive(netMutex);
+            }
+            Serial.println("[Flight] Cleared, returning to clock");
+          }
+        }
+      }
+    }
+
+    vTaskDelay(pdMS_TO_TICKS(250));
+  }
 }
 
 void registerWifiEvents() {
@@ -142,9 +334,14 @@ void registerWifiEvents() {
       case ARDUINO_EVENT_WIFI_STA_CONNECTED:
         applyWifiTxPower(cfg.wifiTxPowerDbm);
         break;
+      case ARDUINO_EVENT_WIFI_STA_GOT_IP:
+        applyWifiTxPower(cfg.wifiTxPowerDbm);
+        staGotIpEvent = true;
+        break;
       case ARDUINO_EVENT_WIFI_STA_DISCONNECTED:
         Serial.printf("\n[WiFi] STA disconnected reason=%d\n",
                       info.wifi_sta_disconnected.reason);
+        netResetConn = true;
         break;
       case ARDUINO_EVENT_WIFI_AP_START:
         Serial.println("[WiFi] AP_START");
@@ -168,7 +365,8 @@ void registerWifiEvents() {
   });
 }
 
-bool connectWifiSta(uint32_t timeoutMs = 15000) {
+bool connectWifiSta(uint32_t timeoutMs = WIFI_CONNECT_TIMEOUT_MS,
+                    uint8_t maxAttempts = WIFI_CONNECT_ATTEMPTS) {
   if (cfg.wifiSsid.isEmpty()) {
     Serial.println("[WiFi] No SSID configured.");
     return false;
@@ -176,51 +374,63 @@ bool connectWifiSta(uint32_t timeoutMs = 15000) {
 
   registerWifiEvents();
 
-  Serial.printf("[WiFi] Joining \"%s\" (passLen=%u) ",
-                cfg.wifiSsid.c_str(),
-                static_cast<unsigned>(cfg.wifiPass.length()));
-  Display::showBootScreen("Connecting Wi-Fi...");
   WiFi.persistent(false);
   WiFi.setHostname(MDNS_HOSTNAME); // Must be set before WiFi.mode(WIFI_STA) on ESP32 for DHCP Option 12
   WiFi.mode(WIFI_STA);
   WiFi.setHostname(MDNS_HOSTNAME);
-  WiFi.setSleep(false); // Keep RX active for reliable mDNS multicast
-  applyWifiTxPower(cfg.wifiTxPowerDbm);
-  WiFi.begin(cfg.wifiSsid.c_str(), cfg.wifiPass.c_str());
+  WiFi.setAutoReconnect(true);
+  WiFi.setSleep(false); // Keep RX active for reliable mDNS multicast & weak-link ACKs
+  esp_wifi_set_bandwidth(WIFI_IF_STA, WIFI_BW_HT20);
   applyWifiTxPower(cfg.wifiTxPowerDbm);
 
-  unsigned long start = millis();
-  while (WiFi.status() != WL_CONNECTED && (millis() - start) < timeoutMs) {
-    delay(500);
-    Serial.print(".");
-  }
-  Serial.println();
+  for (uint8_t attempt = 1; attempt <= maxAttempts; ++attempt) {
+    char bootMsg[32];
+    if (attempt == 1) {
+      snprintf(bootMsg, sizeof(bootMsg), "Connecting Wi-Fi...");
+    } else {
+      snprintf(bootMsg, sizeof(bootMsg), "Wi-Fi retry %u/%u...",
+               static_cast<unsigned>(attempt),
+               static_cast<unsigned>(maxAttempts));
+    }
+    Display::showBootScreen(bootMsg);
 
-  if (WiFi.status() == WL_CONNECTED) {
+    Serial.printf("[WiFi] Attempt %u/%u joining \"%s\" (passLen=%u) ",
+                  static_cast<unsigned>(attempt),
+                  static_cast<unsigned>(maxAttempts),
+                  cfg.wifiSsid.c_str(),
+                  static_cast<unsigned>(cfg.wifiPass.length()));
+
+    if (attempt > 1) {
+      WiFi.disconnect(false);
+      delay(300);
+    }
+    WiFi.begin(cfg.wifiSsid.c_str(), cfg.wifiPass.c_str());
     applyWifiTxPower(cfg.wifiTxPowerDbm);
-    int8_t actualQuarterDbm = 0;
-    esp_wifi_get_max_tx_power(&actualQuarterDbm);
-    Serial.printf("[WiFi] Connected! IP: %s  Host: %s  RSSI: %d dBm  TxPower: %.2f dBm\n",
-                  WiFi.localIP().toString().c_str(),
-                  WiFi.getHostname(),
-                  WiFi.RSSI(),
-                  actualQuarterDbm * 0.25f);
-    return true;
+
+    unsigned long start = millis();
+    while (WiFi.status() != WL_CONNECTED && (millis() - start) < timeoutMs) {
+      delay(250);
+      Serial.print(".");
+    }
+    Serial.println();
+
+    if (WiFi.status() == WL_CONNECTED) {
+      applyWifiTxPower(cfg.wifiTxPowerDbm);
+      int8_t actualQuarterDbm = 0;
+      esp_wifi_get_max_tx_power(&actualQuarterDbm);
+      Serial.printf("[WiFi] Connected! IP: %s  Host: %s  RSSI: %d dBm  TxPower: %.2f dBm\n",
+                    WiFi.localIP().toString().c_str(),
+                    WiFi.getHostname(),
+                    WiFi.RSSI(),
+                    actualQuarterDbm * 0.25f);
+      return true;
+    }
+
+    Serial.printf("[WiFi] Attempt %u failed (status=%d)\n",
+                  static_cast<unsigned>(attempt),
+                  static_cast<int>(WiFi.status()));
   }
 
-  Serial.printf("[WiFi] Connection failed (status=%d). Scanning 2.4GHz...\n",
-                static_cast<int>(WiFi.status()));
-  WiFi.disconnect(false);
-  delay(100);
-  int n = WiFi.scanNetworks();
-  Serial.printf("[WiFi] Scan found %d networks\n", n);
-  for (int i = 0; i < n && i < 8; ++i) {
-    Serial.printf("  - \"%s\" ch=%d rssi=%d\n",
-                  WiFi.SSID(i).c_str(),
-                  WiFi.channel(i),
-                  WiFi.RSSI(i));
-  }
-  WiFi.scanDelete();
   return false;
 }
 
@@ -241,6 +451,7 @@ void startApPortal() {
   applyWifiTxPower(cfg.wifiTxPowerDbm);
   netState.wifiConnected = false;
   netState.apMode = true;
+  netWifiConnected = false;
   Serial.printf("[WiFi] SoftAP \"%s\" %s at http://%s (txPower=%d)\n",
                 AP_SSID,
                 apOk ? "started" : "FAILED",
@@ -253,19 +464,9 @@ void setupNetwork() {
   if (connectWifiSta()) {
     netState.wifiConnected = true;
     netState.apMode = false;
-    MDNS.end();
-    if (MDNS.begin(MDNS_HOSTNAME)) {
-      MDNS.setInstanceName("ESP32 Flight Clock");
-      MDNS.addService("http", "tcp", 80);
-#ifdef OTA_PASSWORD
-      MDNS.enableArduino(3232, true);
-#else
-      MDNS.enableArduino(3232, false);
-#endif
-      Serial.printf("[mDNS] http://%s.local (HTTP + OTA registered)\n", MDNS_HOSTNAME);
-    } else {
-      Serial.println("[mDNS] Failed to start responder");
-    }
+    netWifiConnected = true;
+    staGotIpEvent = false;
+    startMdns();
     setupOta();
     applyTimezone();
     Serial.printf("[NTP] Syncing time (TZ=%s)\n", cfg.timezone.c_str());
@@ -325,10 +526,18 @@ void setup() {
   Serial.println("[Display] GC9A01 initialized");
   Display::showBootScreen("Starting up...");
 
+  netMutex = xSemaphoreCreateMutex();
+  syncNetConfigSnapshot();
+
   setupNetwork();
+
+  xTaskCreate(netPollTask, "netPoll", 8192, nullptr, 1, &netTaskHandle);
 }
 
 void loop() {
+  bool anyOtaActive = otaInProgress || netState.otaInProgress;
+  netOtaActive = anyOtaActive;
+
   if (netState.wifiConnected) {
     ArduinoOTA.handle();
     if (otaInProgress) {
@@ -340,28 +549,31 @@ void loop() {
   PortalServer::loop();
 
   if (netState.rebootRequested) {
+    pauseNetTaskForShutdown(500);
     delay(300);
     ESP.restart();
   }
 
   if (netState.wifiReconnectNeeded) {
     netState.wifiReconnectNeeded = false;
+    syncNetConfigSnapshot();
+    netWifiConnected = false;
+    netResetConn = true;
     WiFi.disconnect(true);
     delay(200);
     setupNetwork();
-    weatherFetchedOnce = false;
-    lastWeatherPollMs = 0;
-    lastFlightPollMs = 0;
+    netForceWeather = true;
+    netForceFlight = true;
   }
 
   if (netState.configUpdated) {
     netState.configUpdated = false;
+    syncNetConfigSnapshot();
     if (netState.wifiConnected) {
       applyTimezone();
     }
-    weatherFetchedOnce = false;
-    lastWeatherPollMs = 0;
-    lastFlightPollMs = 0;
+    netForceWeather = true;
+    netForceFlight = true;
     lastRenderMs = 0;
   }
 
@@ -370,13 +582,43 @@ void loop() {
     triggerTestFlight();
   }
 
+  unsigned long now = millis();
+
   // Track Wi-Fi & NTP state
   if (!netState.apMode) {
-    netState.wifiConnected = (WiFi.status() == WL_CONNECTED);
+    bool connectedNow = (WiFi.status() == WL_CONNECTED);
+    netState.wifiConnected = connectedNow;
+    netWifiConnected = connectedNow;
+
+    if (staGotIpEvent && connectedNow) {
+      staGotIpEvent = false;
+      applyWifiTxPower(cfg.wifiTxPowerDbm);
+      startMdns();
+      if (!netState.timeSynced) {
+        applyTimezone();
+      }
+      Serial.printf("[WiFi] Link up: %s (RSSI %d dBm)\n",
+                    WiFi.localIP().toString().c_str(),
+                    WiFi.RSSI());
+      lastRenderMs = 0;
+    }
+
+    if (!connectedNow && !anyOtaActive && !cfg.wifiSsid.isEmpty()) {
+      if (lastReconnectAttemptMs == 0 || (now - lastReconnectAttemptMs) >= WIFI_RECONNECT_INTERVAL_MS) {
+        lastReconnectAttemptMs = now;
+        Serial.println("[WiFi] Link down; attempting reconnect...");
+        applyWifiTxPower(cfg.wifiTxPowerDbm);
+        WiFi.reconnect();
+      }
+    } else if (connectedNow) {
+      lastReconnectAttemptMs = 0;
+    }
+
     if (!netState.timeSynced) {
       struct tm ti;
       if (getLocalTime(&ti, 5) && ti.tm_year > (2020 - 1900)) {
         netState.timeSynced = true;
+        netTimeSynced = true;
         lastRenderMs = 0;
         char tBuf[24];
         strftime(tBuf, sizeof(tBuf), "%Y-%m-%d %H:%M:%S", &ti);
@@ -385,10 +627,29 @@ void loop() {
     }
   }
 
-  unsigned long now = millis();
+  // Drain results from background network polling task
+  if (netMutex && xSemaphoreTake(netMutex, 0) == pdTRUE) {
+    if (netWeatherUpdated) {
+      weather = netWeatherResult;
+      netWeatherUpdated = false;
+      lastRenderMs = 0;
+    }
+    if (netFlightUpdated) {
+      flight = netFlightResult;
+      netFlightUpdated = false;
+      digitalWrite(LED_PIN, LOW); // Indicate overhead plane
+      lastRenderMs = 0;
+    } else if (netFlightCleared) {
+      flight.active = false;
+      netFlightCleared = false;
+      digitalWrite(LED_PIN, HIGH);
+      lastRenderMs = 0;
+    }
+    xSemaphoreGive(netMutex);
+  }
 
   // Auto-reset if disconnected from Wi-Fi for 5 minutes with no hotspot clients connected
-  if (!otaInProgress && !cfg.wifiSsid.isEmpty()) {
+  if (!anyOtaActive && !cfg.wifiSsid.isEmpty()) {
     bool hasApClients = netState.apMode && (WiFi.softAPgetStationNum() > 0);
     if (netState.wifiConnected || hasApClients) {
       wifiDisconnectedSinceMs = 0;
@@ -397,6 +658,7 @@ void loop() {
     } else if ((now - wifiDisconnectedSinceMs) >= WIFI_DISCONNECT_RESET_MS) {
       Serial.println("[WiFi] Disconnected for 5 minutes with no hotspot clients; rebooting to retry Wi-Fi...");
       Serial.flush();
+      pauseNetTaskForShutdown(500);
       delay(200);
       ESP.restart();
     }
@@ -405,76 +667,26 @@ void loop() {
   }
 
   // Quiet hours: turn display off and deep sleep after 5-minute post-reboot grace period
-  if (!netState.apMode && !otaInProgress && isQuietHours(cfg, netState.timeSynced)) {
+  if (!netState.apMode && !anyOtaActive && isQuietHours(cfg, netState.timeSynced)) {
     if (wokeFromDeepSleep || now >= QUIET_SLEEP_GRACE_MS) {
       enterQuietDeepSleep();
     }
   }
 
-  // Render screen every 1s (or immediately when invalidated) before blocking network polls
-  if (!netState.apMode && (lastRenderMs == 0 || (now - lastRenderMs) >= 1000UL)) {
+  // Render screen every 1s (or immediately when invalidated)
+  if (!netState.apMode && !anyOtaActive && (lastRenderMs == 0 || (now - lastRenderMs) >= 1000UL)) {
     lastRenderMs = now;
     if (testFlightUntilMs > now) {
       Display::renderFlightScreen(cfg, testFlight);
     } else if (flight.active) {
       Display::renderFlightScreen(cfg, flight);
     } else {
-      String ip = netState.wifiConnected ? WiFi.localIP().toString() : "";
-      Display::renderClockWeather(cfg, weather, netState.wifiConnected, netState.timeSynced, ip.c_str());
-    }
-  }
-
-  // Poll Weather & Flights only when connected and GPS is configured
-  if (netState.wifiConnected && cfg.locationConfigured) {
-    if (!weatherFetchedOnce || (now - lastWeatherPollMs) >= WEATHER_POLL_INTERVAL_MS) {
-      lastWeatherPollMs = now;
-      weatherFetchedOnce = true;
-      if (Weather::fetch(cfg, weather)) {
-        Serial.printf("[Weather] %.1f C, %s (RH %d%%)\n",
-                      weather.tempC,
-                      Weather::describeCode(weather.weatherCode),
-                      weather.humidity);
-        if (!flight.active && testFlightUntilMs <= now) {
-          String ip = netState.wifiConnected ? WiFi.localIP().toString() : "";
-          Display::renderClockWeather(cfg, weather, netState.wifiConnected, netState.timeSynced, ip.c_str());
-        }
-      } else {
-        Serial.println("[Weather] Fetch failed");
+      char ipBuf[16] = {0};
+      if (!cfg.locationConfigured && netState.wifiConnected) {
+        IPAddress ip = WiFi.localIP();
+        snprintf(ipBuf, sizeof(ipBuf), "%u.%u.%u.%u", ip[0], ip[1], ip[2], ip[3]);
       }
-      lastRenderMs = 0;
-    }
-
-    unsigned long flightIntervalMs = flight.active
-                                         ? FLIGHT_ACTIVE_POLL_MS
-                                         : (static_cast<unsigned long>(cfg.flightPollSec) * 1000UL);
-    if (isQuietHours(cfg, netState.timeSynced)) {
-      if (flight.active && (now - flight.lastSeenMs) >= FLIGHT_HOLD_MS) {
-        flight.active = false;
-        digitalWrite(LED_PIN, HIGH);
-        lastRenderMs = 0;
-        Serial.println("[Flight] Quiet hours active, returning to clock");
-      }
-    } else if (lastFlightPollMs == 0 || (now - lastFlightPollMs) >= flightIntervalMs) {
-      lastFlightPollMs = now;
-      FlightInfo latest;
-      if (Flights::fetchClosest(cfg, latest)) {
-        if (latest.active) {
-          flight = latest;
-          digitalWrite(LED_PIN, LOW); // Indicate overhead plane
-          Serial.printf("[Flight] %s (%s) %s->%s alt=%ldft dist=%.1fkm\n",
-                        flight.callsign,
-                        flight.aircraftType,
-                        flight.origin[0] ? flight.origin : "?",
-                        flight.destination[0] ? flight.destination : "?",
-                        static_cast<long>(flight.altitudeFt),
-                        flight.distanceKm);
-        } else if (flight.active && (now - flight.lastSeenMs) >= FLIGHT_HOLD_MS) {
-          flight.active = false;
-          digitalWrite(LED_PIN, HIGH);
-          Serial.println("[Flight] Cleared, returning to clock");
-        }
-        lastRenderMs = 0;
-      }
+      Display::renderClockWeather(cfg, weather, netState.wifiConnected, netState.timeSynced, ipBuf);
     }
   }
 

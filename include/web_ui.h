@@ -586,11 +586,11 @@ const char WEB_UI_HTML[] PROGMEM = R"rawliteral(<!DOCTYPE html>
         <div class="field">
           <div class="range-header">
             <label for="wifiTxPowerDbm">Wi-Fi TX Power</label>
-            <output for="wifiTxPowerDbm" id="txPower-val" class="range-value">5.0 dBm</output>
+            <output for="wifiTxPowerDbm" id="txPower-val" class="range-value">8.5 dBm</output>
           </div>
-          <span id="txpower-hint" class="hint">Transmit power from 5.0 to 20.0 dBm (0.5 dBm steps). Default 5.0 dBm prevents RF brownout on ESP32-C3 Super Mini; increase if signal is weak.</span>
-          <input type="range" id="wifiTxPowerDbm" name="wifiTxPowerDbm" min="5" max="20" step="0.5" value="5"
-            aria-describedby="txpower-hint" aria-valuetext="5.0 dBm">
+          <span id="txpower-hint" class="hint">Transmit power from 5.0 to 20.0 dBm (0.5 dBm steps). Default 8.5 dBm balances range and RF stability on ESP32-C3 Super Mini; increase if RSSI is weak, lower to 5.0 dBm if brownouts occur.</span>
+          <input type="range" id="wifiTxPowerDbm" name="wifiTxPowerDbm" min="5" max="20" step="0.5" value="8.5"
+            aria-describedby="txpower-hint" aria-valuetext="8.5 dBm">
         </div>
         </div>
       </details>
@@ -1182,17 +1182,27 @@ const char WEB_UI_HTML[] PROGMEM = R"rawliteral(<!DOCTYPE html>
     });
 
     // Load status & config
-    async function loadStatus() {
+    let statusInFlight = false;
+    async function loadStatus(force = false) {
+      if (statusInFlight) return;
+      if (!force && document.hidden) return;
+      statusInFlight = true;
+      const ctrl = new AbortController();
+      const timer = setTimeout(() => ctrl.abort(), 5000);
       try {
-        const res = await fetch('/api/status');
+        const res = await fetch('/api/status', { signal: ctrl.signal });
         const data = await res.json();
-        document.getElementById('st-wifi').textContent = data.wifiConnected ? `${data.ssid} (${data.ip})` : `AP Mode (${data.ip})`;
+        const rssiText = (typeof data.rssi === 'number' && data.rssi < 0) ? `, ${data.rssi} dBm` : '';
+        document.getElementById('st-wifi').textContent = data.wifiConnected ? `${data.ssid} (${data.ip}${rssiText})` : `AP Mode (${data.ip})`;
         document.getElementById('st-time').textContent = data.time || '--:--';
         document.getElementById('st-weather').textContent = data.weather || '--';
         document.getElementById('st-flight').textContent = data.flight || 'None in range';
         if (data.firmware) document.getElementById('st-fw').textContent = data.firmware;
       } catch {
         document.getElementById('st-wifi').textContent = 'Offline';
+      } finally {
+        clearTimeout(timer);
+        statusInFlight = false;
       }
     }
 
@@ -1201,7 +1211,7 @@ const char WEB_UI_HTML[] PROGMEM = R"rawliteral(<!DOCTYPE html>
         const res = await fetch('/api/config');
         const c = await res.json();
         document.getElementById('wifiSsid').value = c.wifiSsid || '';
-        txPowerInput.value = c.wifiTxPowerDbm ?? 5;
+        txPowerInput.value = c.wifiTxPowerDbm ?? 8.5;
         syncTxPowerSlider();
         document.getElementById('latitude').value = c.locationConfigured ? c.latitude : '';
         document.getElementById('longitude').value = c.locationConfigured ? c.longitude : '';
@@ -1212,9 +1222,9 @@ const char WEB_UI_HTML[] PROGMEM = R"rawliteral(<!DOCTYPE html>
         document.getElementById('use24Hour').checked = !!c.use24Hour;
         document.getElementById('useFahrenheit').checked = !!c.useFahrenheit;
         document.getElementById('useImperialDist').checked = !!c.useImperialDist;
-        document.getElementById('searchRadiusKm').value = c.searchRadiusKm ?? 15;
-        document.getElementById('flightPollSec').value = c.flightPollSec ?? 15;
-        document.getElementById('maxAltitudeFt').value = c.maxAltitudeFt ?? 50000;
+        document.getElementById('searchRadiusKm').value = c.searchRadiusKm ?? 5;
+        document.getElementById('flightPollSec').value = c.flightPollSec ?? 30;
+        document.getElementById('maxAltitudeFt').value = c.maxAltitudeFt ?? 5000;
         document.getElementById('flightSource').value = c.flightSource || 'airplanes.live';
         document.getElementById('quietHoursEnabled').checked = c.quietHoursEnabled !== false;
         document.getElementById('quietStartHour').value = c.quietStartHour ?? 1;
@@ -1227,7 +1237,7 @@ const char WEB_UI_HTML[] PROGMEM = R"rawliteral(<!DOCTYPE html>
       }
     }
 
-    document.getElementById('btn-refresh').addEventListener('click', loadStatus);
+    document.getElementById('btn-refresh').addEventListener('click', () => loadStatus(true));
     document.getElementById('btn-test-flight').addEventListener('click', async () => {
       await fetch('/api/test-flight', { method: 'POST' });
       showBanner('Triggered 10-second test flight display on screen.', true);
@@ -1338,7 +1348,7 @@ const char WEB_UI_HTML[] PROGMEM = R"rawliteral(<!DOCTYPE html>
           savedSnapshot = captureConfigSnapshot();
           updateDirtyState();
         }
-        loadStatus();
+        loadStatus(true);
       } catch {
         showBanner('Failed to save settings.', false);
       } finally {
@@ -1347,9 +1357,13 @@ const char WEB_UI_HTML[] PROGMEM = R"rawliteral(<!DOCTYPE html>
       }
     });
 
+    document.addEventListener('visibilitychange', () => {
+      if (!document.hidden) loadStatus(true);
+    });
+
     loadConfig();
-    loadStatus();
-    setInterval(loadStatus, 10000);
+    loadStatus(true);
+    setInterval(() => loadStatus(false), 10000);
   </script>
 </body>
 </html>

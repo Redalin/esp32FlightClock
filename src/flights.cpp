@@ -72,6 +72,10 @@ void recordFailure(HostBackoff& b, int httpCode, const char* host, unsigned long
   } else if (httpCode == 403) {
     backoffMs = (b.streak == 0) ? 300000UL : 900000UL; // 5m then 15m
     if (b.streak < 10) ++b.streak;
+  } else if (httpCode < 0) {
+    uint8_t shift = (b.streak < 2) ? b.streak : 2;
+    backoffMs = 15000UL << shift; // 15s, 30s, 60s
+    if (b.streak < 10) ++b.streak;
   }
   if (backoffMs > 0) {
     b.cooldownUntilMs = now + backoffMs;
@@ -81,6 +85,214 @@ void recordFailure(HostBackoff& b, int httpCode, const char* host, unsigned long
                   backoffMs / 1000UL);
   }
 }
+
+// Streaming reader that handles both Content-Length and HTTP/1.1 chunked responses
+// so ArduinoJson can parse directly off the socket while keeping Keep-Alive aligned.
+class HttpBodyStream : public Stream {
+public:
+  HttpBodyStream(WiFiClient& client, int contentLength, uint32_t timeoutMs = 5000)
+      : _client(client),
+        _chunked(contentLength < 0),
+        _remaining(contentLength >= 0 ? static_cast<size_t>(contentLength) : 0),
+        _timeoutMs(timeoutMs),
+        _eof(contentLength == 0) {}
+
+  int available() override {
+    if (_eof) return 0;
+    if (!_chunked) {
+      int avail = _client.available();
+      return (static_cast<size_t>(avail) > _remaining) ? static_cast<int>(_remaining) : avail;
+    }
+    if (_chunkRemaining > 0) {
+      int avail = _client.available();
+      return (static_cast<size_t>(avail) > _chunkRemaining) ? static_cast<int>(_chunkRemaining) : avail;
+    }
+    return _client.available() > 0 ? 1 : 0;
+  }
+
+  int read() override {
+    uint8_t b = 0;
+    return (readBytes(reinterpret_cast<char*>(&b), 1) == 1) ? static_cast<int>(b) : -1;
+  }
+
+  int peek() override {
+    if (_eof) return -1;
+    return _client.peek();
+  }
+
+  size_t write(uint8_t) override { return 0; }
+
+  size_t readBytes(char* buffer, size_t length) {
+    if (_eof || length == 0) return 0;
+    size_t total = 0;
+    while (total < length && !_eof) {
+      if (_chunked) {
+        if (_chunkRemaining == 0) {
+          if (!readNextChunkHeader()) {
+            break;
+          }
+          if (_eof) {
+            break;
+          }
+        }
+        size_t toRead = length - total;
+        if (toRead > _chunkRemaining) toRead = _chunkRemaining;
+        size_t got = readRaw(buffer + total, toRead);
+        total += got;
+        _chunkRemaining -= got;
+        if (got == 0) {
+          _error = true;
+          _eof = true;
+          break;
+        }
+        if (_chunkRemaining == 0) {
+          if (!consumeLine()) {
+            _error = true;
+            _eof = true;
+            break;
+          }
+        }
+      } else {
+        if (_remaining == 0) {
+          _eof = true;
+          break;
+        }
+        size_t toRead = length - total;
+        if (toRead > _remaining) toRead = _remaining;
+        size_t got = readRaw(buffer + total, toRead);
+        total += got;
+        _remaining -= got;
+        if (got == 0) {
+          _error = true;
+          _eof = true;
+          break;
+        }
+        if (_remaining == 0) {
+          _eof = true;
+        }
+      }
+    }
+    return total;
+  }
+
+  bool drainToEof() {
+    char discard[64];
+    while (!_eof) {
+      if (readBytes(discard, sizeof(discard)) == 0) {
+        break;
+      }
+    }
+    return _eof && !_error;
+  }
+
+  bool hadError() const { return _error; }
+
+private:
+  int readByteBlocking() {
+    unsigned long start = millis();
+    while (true) {
+      int c = _client.read();
+      if (c >= 0) return c;
+      if (!_client.connected() && _client.available() == 0) {
+        return -1;
+      }
+      if ((millis() - start) >= _timeoutMs) {
+        return -1;
+      }
+      delay(1);
+    }
+  }
+
+  size_t readRaw(char* buf, size_t len) {
+    unsigned long start = millis();
+    while (_client.available() == 0) {
+      if (!_client.connected()) {
+        return 0;
+      }
+      if ((millis() - start) >= _timeoutMs) {
+        return 0;
+      }
+      delay(1);
+    }
+    int avail = _client.available();
+    size_t n = (static_cast<size_t>(avail) < len) ? static_cast<size_t>(avail) : len;
+    int got = _client.read(reinterpret_cast<uint8_t*>(buf), n);
+    return (got > 0) ? static_cast<size_t>(got) : 0;
+  }
+
+  bool consumeLine() {
+    while (true) {
+      int c = readByteBlocking();
+      if (c < 0) return false;
+      if (c == '\n') return true;
+    }
+  }
+
+  bool readNextChunkHeader() {
+    size_t chunkSize = 0;
+    bool gotHex = false;
+    bool inExt = false;
+    while (true) {
+      int c = readByteBlocking();
+      if (c < 0) {
+        _error = true;
+        _eof = true;
+        return false;
+      }
+      if (c == '\n') {
+        if (gotHex) break;
+        continue;
+      }
+      if (c == '\r') continue;
+      if (c == ';') {
+        inExt = true;
+        continue;
+      }
+      if (inExt) continue;
+      int digit = -1;
+      if (c >= '0' && c <= '9') digit = c - '0';
+      else if (c >= 'a' && c <= 'f') digit = 10 + (c - 'a');
+      else if (c >= 'A' && c <= 'F') digit = 10 + (c - 'A');
+      if (digit < 0) {
+        _error = true;
+        _eof = true;
+        return false;
+      }
+      gotHex = true;
+      chunkSize = (chunkSize << 4) | static_cast<size_t>(digit);
+    }
+    if (chunkSize == 0) {
+      // Consume trailing CRLF (and any optional trailer headers) until empty line
+      size_t lineLen = 0;
+      while (true) {
+        int c = readByteBlocking();
+        if (c < 0) {
+          _error = true;
+          break;
+        }
+        if (c == '\r') continue;
+        if (c == '\n') {
+          if (lineLen == 0) break;
+          lineLen = 0;
+        } else {
+          ++lineLen;
+        }
+      }
+      _eof = true;
+      return true;
+    }
+    _chunkRemaining = chunkSize;
+    return true;
+  }
+
+  WiFiClient& _client;
+  bool _chunked;
+  size_t _remaining;
+  size_t _chunkRemaining = 0;
+  uint32_t _timeoutMs;
+  bool _eof = false;
+  bool _error = false;
+};
 
 struct RouteCacheEntry {
   char callsign[16] = {0};
@@ -92,11 +304,29 @@ constexpr size_t kRouteCacheSize = 8;
 RouteCacheEntry routeCache[kRouteCacheSize];
 size_t routeCacheNext = 0;
 
-bool fetchRouteFromAdsbDb(const char* callsign,
-                          char* originOut,
-                          size_t originSize,
-                          char* destOut,
-                          size_t destSize) {
+enum class RouteLookupResult : uint8_t {
+  FOUND = 0,
+  NOT_FOUND,
+  NET_ERROR
+};
+
+// Persistent TLS client + HTTPClient for the active ADS-B feed host (Keep-Alive)
+WiFiClientSecure flightTlsClient;
+HTTPClient flightHttp;
+bool flightClientInit = false;
+char lastFlightHost[48] = {0};
+
+void closeFlightConnection() {
+  flightHttp.end();
+  flightTlsClient.stop();
+  lastFlightHost[0] = '\0';
+}
+
+RouteLookupResult fetchRouteFromAdsbDb(const char* callsign,
+                                       char* originOut,
+                                       size_t originSize,
+                                       char* destOut,
+                                       size_t destSize) {
   char url[96];
   snprintf(url, sizeof(url), "https://api.adsbdb.com/v0/callsign/%s", callsign);
 
@@ -104,35 +334,43 @@ bool fetchRouteFromAdsbDb(const char* callsign,
   client.setInsecure();
 
   HTTPClient http;
-  http.setTimeout(5000);
+  http.useHTTP10(true);
+  http.setConnectTimeout(3500);
+  http.setTimeout(4000);
   http.setUserAgent("ESP32-FlightClock/1.0");
   if (!http.begin(client, url)) {
-    return false;
+    return RouteLookupResult::NET_ERROR;
   }
 
   int httpCode = http.GET();
   if (httpCode != HTTP_CODE_OK) {
     http.end();
-    return false;
+    return (httpCode < 0 || httpCode >= 500 || httpCode == 429)
+               ? RouteLookupResult::NET_ERROR
+               : RouteLookupResult::NOT_FOUND;
   }
 
-  String payload = http.getString();
-  http.end();
-
-  JsonDocument filter;
-  filter["response"]["flightroute"]["origin"]["iata_code"] = true;
-  filter["response"]["flightroute"]["origin"]["icao_code"] = true;
-  filter["response"]["flightroute"]["destination"]["iata_code"] = true;
-  filter["response"]["flightroute"]["destination"]["icao_code"] = true;
+  static JsonDocument filter;
+  static bool filterInit = false;
+  if (!filterInit) {
+    filter["response"]["flightroute"]["origin"]["iata_code"] = true;
+    filter["response"]["flightroute"]["origin"]["icao_code"] = true;
+    filter["response"]["flightroute"]["destination"]["iata_code"] = true;
+    filter["response"]["flightroute"]["destination"]["icao_code"] = true;
+    filterInit = true;
+  }
 
   JsonDocument doc;
-  if (deserializeJson(doc, payload, DeserializationOption::Filter(filter))) {
-    return false;
+  DeserializationError err =
+      deserializeJson(doc, http.getStream(), DeserializationOption::Filter(filter));
+  http.end();
+  if (err) {
+    return RouteLookupResult::NET_ERROR;
   }
 
   JsonObject route = doc["response"]["flightroute"];
   if (route.isNull()) {
-    return false;
+    return RouteLookupResult::NOT_FOUND;
   }
 
   const char* orig = route["origin"]["iata_code"] | "";
@@ -140,34 +378,36 @@ bool fetchRouteFromAdsbDb(const char* callsign,
   const char* dest = route["destination"]["iata_code"] | "";
   if (dest[0] == '\0') dest = route["destination"]["icao_code"] | "";
   if (orig[0] == '\0' || dest[0] == '\0') {
-    return false;
+    return RouteLookupResult::NOT_FOUND;
   }
 
   strlcpy(originOut, orig, originSize);
   strlcpy(destOut, dest, destSize);
-  return true;
+  return RouteLookupResult::FOUND;
 }
 
-bool fetchRouteFromAdsbLol(const char* callsign,
-                           double lat,
-                           double lon,
-                           char* originOut,
-                           size_t originSize,
-                           char* destOut,
-                           size_t destSize) {
+RouteLookupResult fetchRouteFromAdsbLol(const char* callsign,
+                                        double lat,
+                                        double lon,
+                                        char* originOut,
+                                        size_t originSize,
+                                        char* destOut,
+                                        size_t destSize) {
   unsigned long now = millis();
   if (isCooldownActive(adsbLolBackoff, now)) {
-    return false;
+    return RouteLookupResult::NET_ERROR;
   }
 
   WiFiClientSecure client;
   client.setInsecure();
 
   HTTPClient http;
-  http.setTimeout(5000);
+  http.useHTTP10(true);
+  http.setConnectTimeout(3500);
+  http.setTimeout(4000);
   http.setUserAgent("ESP32-FlightClock/1.0");
   if (!http.begin(client, "https://api.adsb.lol/api/0/routeset")) {
-    return false;
+    return RouteLookupResult::NET_ERROR;
   }
   http.addHeader("Content-Type", "application/json");
   http.addHeader("Accept", "application/json");
@@ -189,26 +429,32 @@ bool fetchRouteFromAdsbLol(const char* callsign,
   if (httpCode != HTTP_CODE_OK) {
     http.end();
     recordFailure(adsbLolBackoff, httpCode, "api.adsb.lol", now);
-    return false;
+    return (httpCode < 0 || httpCode >= 500 || httpCode == 429 || httpCode == 403)
+               ? RouteLookupResult::NET_ERROR
+               : RouteLookupResult::NOT_FOUND;
   }
   recordSuccess(adsbLolBackoff);
 
-  String payload = http.getString();
-  http.end();
-
-  JsonDocument filter;
-  filter[0]["airport_codes"] = true;
-  filter[0]["_airports"][0]["iata"] = true;
-  filter[0]["_airports"][0]["icao"] = true;
+  static JsonDocument filter;
+  static bool filterInit = false;
+  if (!filterInit) {
+    filter[0]["airport_codes"] = true;
+    filter[0]["_airports"][0]["iata"] = true;
+    filter[0]["_airports"][0]["icao"] = true;
+    filterInit = true;
+  }
 
   JsonDocument doc;
-  if (deserializeJson(doc, payload, DeserializationOption::Filter(filter))) {
-    return false;
+  DeserializationError err =
+      deserializeJson(doc, http.getStream(), DeserializationOption::Filter(filter));
+  http.end();
+  if (err) {
+    return RouteLookupResult::NET_ERROR;
   }
 
   JsonObject entry = doc[0];
   if (entry.isNull()) {
-    return false;
+    return RouteLookupResult::NOT_FOUND;
   }
 
   const char* orig = "";
@@ -226,7 +472,7 @@ bool fetchRouteFromAdsbLol(const char* callsign,
   if (orig[0] != '\0' && dest[0] != '\0') {
     strlcpy(originOut, orig, originSize);
     strlcpy(destOut, dest, destSize);
-    return true;
+    return RouteLookupResult::FOUND;
   }
 
   const char* codes = entry["airport_codes"] | "";
@@ -237,10 +483,12 @@ bool fetchRouteFromAdsbLol(const char* callsign,
     memcpy(originOut, codes, origLen);
     originOut[origLen] = '\0';
     strlcpy(destOut, dash + 1, destSize);
-    return (originOut[0] != '\0' && destOut[0] != '\0');
+    if (originOut[0] != '\0' && destOut[0] != '\0') {
+      return RouteLookupResult::FOUND;
+    }
   }
 
-  return false;
+  return RouteLookupResult::NOT_FOUND;
 }
 
 void fetchRoute(const char* callsign,
@@ -265,18 +513,27 @@ void fetchRoute(const char* callsign,
     }
   }
 
-  RouteCacheEntry& slot = routeCache[routeCacheNext];
-  routeCacheNext = (routeCacheNext + 1) % kRouteCacheSize;
-  strlcpy(slot.callsign, callsign, sizeof(slot.callsign));
-  slot.origin[0] = '\0';
-  slot.dest[0] = '\0';
-
-  if (!fetchRouteFromAdsbDb(callsign, slot.origin, sizeof(slot.origin), slot.dest, sizeof(slot.dest))) {
-    fetchRouteFromAdsbLol(callsign, lat, lon, slot.origin, sizeof(slot.origin), slot.dest, sizeof(slot.dest));
+  char origBuf[8] = {0};
+  char destBuf[8] = {0};
+  RouteLookupResult r1 = fetchRouteFromAdsbDb(callsign, origBuf, sizeof(origBuf), destBuf, sizeof(destBuf));
+  RouteLookupResult r2 = RouteLookupResult::NOT_FOUND;
+  if (r1 != RouteLookupResult::FOUND) {
+    r2 = fetchRouteFromAdsbLol(callsign, lat, lon, origBuf, sizeof(origBuf), destBuf, sizeof(destBuf));
   }
 
-  strlcpy(originOut, slot.origin, originSize);
-  strlcpy(destOut, slot.dest, destSize);
+  // Only cache negative results when neither lookup failed due to a transient network error
+  bool cacheResult = (r1 == RouteLookupResult::FOUND || r2 == RouteLookupResult::FOUND) ||
+                     (r1 == RouteLookupResult::NOT_FOUND && r2 == RouteLookupResult::NOT_FOUND);
+  if (cacheResult) {
+    RouteCacheEntry& slot = routeCache[routeCacheNext];
+    routeCacheNext = (routeCacheNext + 1) % kRouteCacheSize;
+    strlcpy(slot.callsign, callsign, sizeof(slot.callsign));
+    strlcpy(slot.origin, origBuf, sizeof(slot.origin));
+    strlcpy(slot.dest, destBuf, sizeof(slot.dest));
+  }
+
+  strlcpy(originOut, origBuf, originSize);
+  strlcpy(destOut, destBuf, destSize);
 }
 
 bool fetchFromHost(const char* host,
@@ -295,44 +552,57 @@ bool fetchFromHost(const char* host,
            lon,
            radiusNm);
 
-  WiFiClientSecure client;
-  client.setInsecure();
+  if (!flightClientInit) {
+    flightTlsClient.setInsecure();
+    flightHttp.setReuse(true);
+    flightClientInit = true;
+  }
 
-  HTTPClient http;
-  http.setTimeout(10000);
+  if (strcmp(lastFlightHost, host) != 0) {
+    closeFlightConnection();
+    strlcpy(lastFlightHost, host, sizeof(lastFlightHost));
+  }
+
+  flightHttp.setConnectTimeout(4000);
+  flightHttp.setTimeout(5000);
   const bool isAdsbLol = (strcmp(host, "api.adsb.lol") == 0);
-  http.setUserAgent(isAdsbLol ? "ESP32-FlightClock/1.0" : "curl/8.5.0");
-  if (!http.begin(client, url)) {
+  flightHttp.setUserAgent(isAdsbLol ? "ESP32-FlightClock/1.0" : "curl/8.5.0");
+  if (!flightHttp.begin(flightTlsClient, url)) {
     Serial.printf("[Flights] http.begin failed (%s)\n", host);
+    closeFlightConnection();
     httpCodeOut = -1;
     return false;
   }
-  http.addHeader("Accept", "application/json");
+  flightHttp.addHeader("Accept", "application/json");
 #ifdef ADSB_LOL_API_KEY
   if (isAdsbLol && ADSB_LOL_API_KEY[0] != '\0') {
-    http.addHeader("x-api-key", ADSB_LOL_API_KEY);
+    flightHttp.addHeader("x-api-key", ADSB_LOL_API_KEY);
   }
 #endif
 
-  httpCodeOut = http.GET();
+  httpCodeOut = flightHttp.GET();
   if (httpCodeOut != HTTP_CODE_OK) {
     Serial.printf("[Flights] HTTP %d (%s) from %s (freeHeap=%u)\n",
                   httpCodeOut,
-                  http.errorToString(httpCodeOut).c_str(),
+                  flightHttp.errorToString(httpCodeOut).c_str(),
                   host,
                   static_cast<unsigned>(ESP.getFreeHeap()));
-    http.end();
+    closeFlightConnection();
     return false;
   }
 
-  String payload = http.getString();
-  http.end();
-
+  HttpBodyStream bodyStream(flightHttp.getStream(), flightHttp.getSize(), 5000);
   DeserializationError err =
-      deserializeJson(docOut, payload, DeserializationOption::Filter(filter));
-  if (err) {
-    Serial.printf("[Flights] JSON error from %s: %s\n", host, err.c_str());
-    return false;
+      deserializeJson(docOut, bodyStream, DeserializationOption::Filter(filter));
+  bool cleanEof = bodyStream.drainToEof();
+  flightHttp.end();
+
+  if (err || !cleanEof || bodyStream.hadError()) {
+    closeFlightConnection();
+    if (err) {
+      Serial.printf("[Flights] JSON error from %s: %s\n", host, err.c_str());
+      return false;
+    }
   }
   return true;
 }
@@ -340,6 +610,10 @@ bool fetchFromHost(const char* host,
 } // namespace
 
 namespace Flights {
+
+void resetConnection() {
+  closeFlightConnection();
+}
 
 bool fetchClosest(const AppConfig& cfg, FlightInfo& out) {
   if (!cfg.locationConfigured) {
@@ -350,17 +624,21 @@ bool fetchClosest(const AppConfig& cfg, FlightInfo& out) {
   if (radiusNm < 1.0f) radiusNm = 1.0f;
   if (radiusNm > 150.0f) radiusNm = 150.0f;
 
-  JsonDocument filter;
-  JsonObject acFilter = filter["ac"].add<JsonObject>();
-  acFilter["flight"] = true;
-  acFilter["r"] = true;
-  acFilter["t"] = true;
-  acFilter["alt_baro"] = true;
-  acFilter["gs"] = true;
-  acFilter["track"] = true;
-  acFilter["baro_rate"] = true;
-  acFilter["lat"] = true;
-  acFilter["lon"] = true;
+  static JsonDocument filter;
+  static bool filterInit = false;
+  if (!filterInit) {
+    JsonObject acFilter = filter["ac"].add<JsonObject>();
+    acFilter["flight"] = true;
+    acFilter["r"] = true;
+    acFilter["t"] = true;
+    acFilter["alt_baro"] = true;
+    acFilter["gs"] = true;
+    acFilter["track"] = true;
+    acFilter["baro_rate"] = true;
+    acFilter["lat"] = true;
+    acFilter["lon"] = true;
+    filterInit = true;
+  }
 
   bool primaryIsAdsbLol = (cfg.flightSource == "adsb.lol");
   const char* primaryHost = primaryIsAdsbLol ? "api.adsb.lol" : "api.airplanes.live";

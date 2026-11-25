@@ -21,7 +21,7 @@ void load(AppConfig& cfg) {
 #endif
 
   Preferences prefs;
-  if (!prefs.begin(CONFIG_NAMESPACE, false)) {
+  if (!prefs.begin(CONFIG_NAMESPACE, true)) {
     cfg.wifiSsid = defaultSsid;
     cfg.wifiPass = defaultPass;
     cfg.timezone = defaultTz;
@@ -33,9 +33,10 @@ void load(AppConfig& cfg) {
     return;
   }
 
+  AppConfig defaults;
   cfg.wifiSsid = prefs.getString("ssid", defaultSsid);
   cfg.wifiPass = prefs.getString("pass", defaultPass);
-  cfg.wifiTxPowerDbm = clampWifiTxPowerDbm(prefs.getFloat("txPwr", 5.0f));
+  cfg.wifiTxPowerDbm = clampWifiTxPowerDbm(prefs.getFloat("txPwr", defaults.wifiTxPowerDbm));
   cfg.latitude = prefs.getDouble("lat", 0.0);
   cfg.longitude = prefs.getDouble("lon", 0.0);
   cfg.locationConfigured = prefs.getBool("locSet", false);
@@ -47,19 +48,19 @@ void load(AppConfig& cfg) {
   }
 #endif
   cfg.timezone = prefs.getString("tz", defaultTz);
-  cfg.use24Hour = prefs.getBool("h24", true);
-  cfg.useFahrenheit = prefs.getBool("fahr", false);
-  cfg.useImperialDist = prefs.getBool("imp", false);
-  cfg.brightness = prefs.getUChar("bright", 220);
-  cfg.displayOffsetX = clampDisplayOffset(prefs.getChar("offX", 0));
-  cfg.displayOffsetY = clampDisplayOffset(prefs.getChar("offY", 0));
-  cfg.searchRadiusKm = prefs.getFloat("radKm", 15.0f);
-  cfg.flightPollSec = prefs.getUShort("fPoll", 15);
-  cfg.maxAltitudeFt = prefs.getInt("maxAlt", 50000);
-  cfg.flightSource = prefs.getString("fSrc", "airplanes.live");
-  cfg.quietHoursEnabled = prefs.getBool("qEn", true);
-  cfg.quietStartHour = prefs.getUChar("qStart", 1);
-  cfg.quietEndHour = prefs.getUChar("qEnd", 6);
+  cfg.use24Hour = prefs.getBool("h24", defaults.use24Hour);
+  cfg.useFahrenheit = prefs.getBool("fahr", defaults.useFahrenheit);
+  cfg.useImperialDist = prefs.getBool("imp", defaults.useImperialDist);
+  cfg.brightness = prefs.getUChar("bright", defaults.brightness);
+  cfg.displayOffsetX = clampDisplayOffset(prefs.getChar("offX", defaults.displayOffsetX));
+  cfg.displayOffsetY = clampDisplayOffset(prefs.getChar("offY", defaults.displayOffsetY));
+  cfg.searchRadiusKm = prefs.getFloat("radKm", defaults.searchRadiusKm);
+  cfg.flightPollSec = prefs.getUShort("fPoll", defaults.flightPollSec);
+  cfg.maxAltitudeFt = prefs.getInt("maxAlt", defaults.maxAltitudeFt);
+  cfg.flightSource = prefs.getString("fSrc", defaults.flightSource);
+  cfg.quietHoursEnabled = prefs.getBool("qEn", defaults.quietHoursEnabled);
+  cfg.quietStartHour = prefs.getUChar("qStart", defaults.quietStartHour);
+  cfg.quietEndHour = prefs.getUChar("qEnd", defaults.quietEndHour);
 
   prefs.end();
 }

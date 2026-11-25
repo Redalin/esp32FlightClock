@@ -21,4 +21,5 @@ struct FlightInfo {
 
 namespace Flights {
   bool fetchClosest(const AppConfig& cfg, FlightInfo& out);
+  void resetConnection();
 }

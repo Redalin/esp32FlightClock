@@ -25,18 +25,23 @@
 #define MDNS_HOSTNAME "flightclock"
 #define CONFIG_NAMESPACE "flightclock"
 
-// Polling intervals
-#define WEATHER_POLL_INTERVAL_MS (10UL * 60UL * 1000UL) // 10 minutes
-#define FLIGHT_ACTIVE_POLL_MS    (5UL * 1000UL)        // Poll every 5s while tracking a flight
-#define FLIGHT_HOLD_MS           (15UL * 1000UL)       // Keep flight screen 15s after last seen
-#define QUIET_SLEEP_GRACE_MS     (5UL * 60UL * 1000UL) // 5 minutes after reboot before deep sleep
-#define WIFI_DISCONNECT_RESET_MS (5UL * 60UL * 1000UL) // 5 minutes disconnected (with no AP clients) before reboot
+// Polling & Wi-Fi recovery intervals
+#define WEATHER_POLL_INTERVAL_MS    (10UL * 60UL * 1000UL) // 10 minutes
+#define WEATHER_RETRY_MIN_MS        (30UL * 1000UL)        // Initial retry delay on weather fetch failure
+#define WEATHER_RETRY_MAX_MS        (5UL * 60UL * 1000UL)  // Cap retry delay on weather fetch failure
+#define FLIGHT_ACTIVE_POLL_MS       (5UL * 1000UL)         // Poll every 5s while tracking a flight
+#define FLIGHT_HOLD_MS              (15UL * 1000UL)        // Keep flight screen 15s after last seen
+#define QUIET_SLEEP_GRACE_MS        (5UL * 60UL * 1000UL)  // 5 minutes after reboot before deep sleep
+#define WIFI_CONNECT_ATTEMPTS       3                      // STA connect attempts before AP fallback
+#define WIFI_CONNECT_TIMEOUT_MS     (12UL * 1000UL)        // Timeout per STA connect attempt
+#define WIFI_RECONNECT_INTERVAL_MS  (30UL * 1000UL)        // Periodic reconnect attempt when STA drops
+#define WIFI_DISCONNECT_RESET_MS    (5UL * 60UL * 1000UL)  // 5 minutes disconnected (with no AP clients) before reboot
 
 struct AppConfig {
   // Wi-Fi
   String wifiSsid;
   String wifiPass;
-  float wifiTxPowerDbm = 5.0f; // 5.0..20.0 dBm in 0.5 dBm steps
+  float wifiTxPowerDbm = 8.5f; // 5.0..20.0 dBm in 0.5 dBm steps
 
   // GPS Location
   double latitude = 0.0;

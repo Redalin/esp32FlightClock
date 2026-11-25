@@ -200,10 +200,10 @@ void drawDialTicks(int cx, int cy, float innerR, float outerR,
 
 // Vector airplane silhouette pointing along angleDeg (0 = up / 12 o'clock)
 void drawPlaneIcon(int cx, int cy, float scale, float angleDeg, uint16_t color) {
+  float rad = angleDeg * kDegToRad;
+  float s = sinf(rad);
+  float c = cosf(rad);
   auto pt = [&](float lx, float ly, int& ox, int& oy) {
-    float rad = angleDeg * kDegToRad;
-    float s = sinf(rad);
-    float c = cosf(rad);
     float rx = lx * c - ly * s;
     float ry = lx * s + ly * c;
     ox = cx + static_cast<int>(roundf(rx * scale));

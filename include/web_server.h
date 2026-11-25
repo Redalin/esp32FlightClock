@@ -13,6 +13,7 @@ namespace PortalServer {
     bool wifiReconnectNeeded = false;
     bool testFlightRequested = false;
     bool rebootRequested = false;
+    bool otaInProgress = false;
   };
 
   void begin(AppConfig& cfg,
