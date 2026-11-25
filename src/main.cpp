@@ -137,6 +137,10 @@ void registerWifiEvents() {
   eventRegistered = true;
   WiFi.onEvent([](WiFiEvent_t event, WiFiEventInfo_t info) {
     switch (event) {
+      case ARDUINO_EVENT_WIFI_STA_START:
+      case ARDUINO_EVENT_WIFI_STA_CONNECTED:
+        applyWifiTxPower(cfg.wifiTxPowerDbm);
+        break;
       case ARDUINO_EVENT_WIFI_STA_DISCONNECTED:
         Serial.printf("\n[WiFi] STA disconnected reason=%d\n",
                       info.wifi_sta_disconnected.reason);
@@ -182,6 +186,7 @@ bool connectWifiSta(uint32_t timeoutMs = 15000) {
   WiFi.setSleep(false); // Keep RX active for reliable mDNS multicast
   applyWifiTxPower(cfg.wifiTxPowerDbm);
   WiFi.begin(cfg.wifiSsid.c_str(), cfg.wifiPass.c_str());
+  applyWifiTxPower(cfg.wifiTxPowerDbm);
 
   unsigned long start = millis();
   while (WiFi.status() != WL_CONNECTED && (millis() - start) < timeoutMs) {
@@ -191,10 +196,14 @@ bool connectWifiSta(uint32_t timeoutMs = 15000) {
   Serial.println();
 
   if (WiFi.status() == WL_CONNECTED) {
-    Serial.printf("[WiFi] Connected! IP: %s  Host: %s  RSSI: %d dBm\n",
+    applyWifiTxPower(cfg.wifiTxPowerDbm);
+    int8_t actualQuarterDbm = 0;
+    esp_wifi_get_max_tx_power(&actualQuarterDbm);
+    Serial.printf("[WiFi] Connected! IP: %s  Host: %s  RSSI: %d dBm  TxPower: %.2f dBm\n",
                   WiFi.localIP().toString().c_str(),
                   WiFi.getHostname(),
-                  WiFi.RSSI());
+                  WiFi.RSSI(),
+                  actualQuarterDbm * 0.25f);
     return true;
   }
 
@@ -300,8 +309,9 @@ void setup() {
   }
 
   Storage::load(cfg);
-  Serial.printf("[Cfg] SSID=\"%s\" GPS=%s (%.4f, %.4f) TZ=%s offset=(%d,%d)\n",
+  Serial.printf("[Cfg] SSID=\"%s\" txPwr=%.1fdBm GPS=%s (%.4f, %.4f) TZ=%s offset=(%d,%d)\n",
                 cfg.wifiSsid.c_str(),
+                cfg.wifiTxPowerDbm,
                 cfg.locationConfigured ? "yes" : "no",
                 cfg.latitude,
                 cfg.longitude,

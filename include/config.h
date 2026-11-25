@@ -6,7 +6,7 @@
 #include <math.h>
 
 // Firmware release version (bump for every release; also appended to the compiled .bin filename)
-#define FW_VERSION "1.0.3"
+#define FW_VERSION "1.0.4"
 
 // ESP32-C3 Super Mini onboard LED (active LOW)
 #ifndef LED_PIN
