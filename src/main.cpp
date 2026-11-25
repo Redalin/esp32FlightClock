@@ -24,6 +24,7 @@ unsigned long lastWeatherPollMs = 0;
 unsigned long lastFlightPollMs = 0;
 unsigned long lastRenderMs = 0;
 unsigned long testFlightUntilMs = 0;
+unsigned long wifiDisconnectedSinceMs = 0;
 bool weatherFetchedOnce = false;
 bool otaInitialized = false;
 bool otaInProgress = false;
@@ -385,6 +386,23 @@ void loop() {
   }
 
   unsigned long now = millis();
+
+  // Auto-reset if disconnected from Wi-Fi for 5 minutes with no hotspot clients connected
+  if (!otaInProgress && !cfg.wifiSsid.isEmpty()) {
+    bool hasApClients = netState.apMode && (WiFi.softAPgetStationNum() > 0);
+    if (netState.wifiConnected || hasApClients) {
+      wifiDisconnectedSinceMs = 0;
+    } else if (wifiDisconnectedSinceMs == 0) {
+      wifiDisconnectedSinceMs = now ? now : 1UL;
+    } else if ((now - wifiDisconnectedSinceMs) >= WIFI_DISCONNECT_RESET_MS) {
+      Serial.println("[WiFi] Disconnected for 5 minutes with no hotspot clients; rebooting to retry Wi-Fi...");
+      Serial.flush();
+      delay(200);
+      ESP.restart();
+    }
+  } else {
+    wifiDisconnectedSinceMs = 0;
+  }
 
   // Quiet hours: turn display off and deep sleep after 5-minute post-reboot grace period
   if (!netState.apMode && !otaInProgress && isQuietHours(cfg, netState.timeSynced)) {

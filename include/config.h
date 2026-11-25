@@ -6,7 +6,7 @@
 #include <math.h>
 
 // Firmware release version (bump for every release; also appended to the compiled .bin filename)
-#define FW_VERSION "1.0.4"
+#define FW_VERSION "1.0.5"
 
 // ESP32-C3 Super Mini onboard LED (active LOW)
 #ifndef LED_PIN
@@ -30,6 +30,7 @@
 #define FLIGHT_ACTIVE_POLL_MS    (5UL * 1000UL)        // Poll every 5s while tracking a flight
 #define FLIGHT_HOLD_MS           (15UL * 1000UL)       // Keep flight screen 15s after last seen
 #define QUIET_SLEEP_GRACE_MS     (5UL * 60UL * 1000UL) // 5 minutes after reboot before deep sleep
+#define WIFI_DISCONNECT_RESET_MS (5UL * 60UL * 1000UL) // 5 minutes disconnected (with no AP clients) before reboot
 
 struct AppConfig {
   // Wi-Fi
