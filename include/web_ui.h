@@ -753,12 +753,12 @@ const char WEB_UI_HTML[] PROGMEM = R"rawliteral(<!DOCTYPE html>
 
         <div class="check-row">
           <input type="checkbox" id="quietHoursEnabled" name="quietHoursEnabled">
-          <label for="quietHoursEnabled">Pause flight polling during quiet hours</label>
+          <label for="quietHoursEnabled">Turn display off &amp; deep sleep during quiet hours</label>
         </div>
 
         <div class="field">
           <label>Quiet Hours (24h, local time)</label>
-          <span id="quiet-hint" class="hint">Start and end hour (0&ndash;23). Example: 1 to 6 pauses 1:00 AM&ndash;6:00 AM; 23 to 6 pauses overnight.</span>
+          <span id="quiet-hint" class="hint">Start and end hour (0&ndash;23). Example: 1 to 6 sleeps 1:00 AM&ndash;6:00 AM; 23 to 6 sleeps overnight. Includes a 5-minute grace period after reboot so you can change settings.</span>
           <div class="input-row">
             <input type="number" id="quietStartHour" name="quietStartHour" min="0" max="23" required
               aria-label="Quiet start hour" aria-describedby="quiet-hint">

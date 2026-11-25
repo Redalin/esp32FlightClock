@@ -2,6 +2,7 @@
 #include <ArduinoOTA.h>
 #include <ESPmDNS.h>
 #include <WiFi.h>
+#include <esp_sleep.h>
 #include <time.h>
 
 #include "config.h"
@@ -26,6 +27,7 @@ unsigned long testFlightUntilMs = 0;
 bool weatherFetchedOnce = false;
 bool otaInitialized = false;
 bool otaInProgress = false;
+bool wokeFromDeepSleep = false;
 
 void setupOta() {
   if (!otaInitialized) {
@@ -93,6 +95,38 @@ bool isQuietHours(const AppConfig& c, bool timeSynced) {
     return (h >= c.quietStartHour && h < c.quietEndHour);
   }
   return (h >= c.quietStartHour || h < c.quietEndHour);
+}
+
+void enterQuietDeepSleep() {
+  struct tm ti;
+  if (!getLocalTime(&ti, 10)) {
+    return;
+  }
+
+  int nowSec = ti.tm_hour * 3600 + ti.tm_min * 60 + ti.tm_sec;
+  int endSec = static_cast<int>(cfg.quietEndHour) * 3600;
+  int deltaSec = endSec - nowSec;
+  if (deltaSec <= 0) {
+    deltaSec += 24 * 3600;
+  }
+  deltaSec += 5; // Wake cleanly just after quietEndHour:00:00
+  if (deltaSec < 15) {
+    deltaSec = 15;
+  }
+
+  Serial.printf("[Sleep] Quiet hours active; display off & deep sleep for %d s (until %02u:00)\n",
+                deltaSec,
+                static_cast<unsigned>(cfg.quietEndHour));
+  Serial.flush();
+
+  digitalWrite(LED_PIN, HIGH); // Active LOW LED off
+  Display::sleep();
+  WiFi.disconnect(true);
+  WiFi.mode(WIFI_OFF);
+
+  uint64_t sleepUs = static_cast<uint64_t>(deltaSec) * 1000000ULL;
+  esp_sleep_enable_timer_wakeup(sleepUs);
+  esp_deep_sleep_start();
 }
 
 void registerWifiEvents() {
@@ -259,15 +293,21 @@ void setup() {
 
   Serial.begin(115200);
   delay(800); // Allow USB-CDC host to attach
+  wokeFromDeepSleep = (esp_sleep_get_wakeup_cause() == ESP_SLEEP_WAKEUP_TIMER);
   Serial.println("\n=== ESP32-C3 Flight Clock v" FW_VERSION " ===");
+  if (wokeFromDeepSleep) {
+    Serial.println("[Sleep] Woke from deep sleep timer");
+  }
 
   Storage::load(cfg);
-  Serial.printf("[Cfg] SSID=\"%s\" GPS=%s (%.4f, %.4f) TZ=%s\n",
+  Serial.printf("[Cfg] SSID=\"%s\" GPS=%s (%.4f, %.4f) TZ=%s offset=(%d,%d)\n",
                 cfg.wifiSsid.c_str(),
                 cfg.locationConfigured ? "yes" : "no",
                 cfg.latitude,
                 cfg.longitude,
-                cfg.timezone.c_str());
+                cfg.timezone.c_str(),
+                static_cast<int>(cfg.displayOffsetX),
+                static_cast<int>(cfg.displayOffsetY));
 
   Display::init(cfg.brightness);
   Display::setOffset(cfg.displayOffsetX, cfg.displayOffsetY);
@@ -335,6 +375,13 @@ void loop() {
   }
 
   unsigned long now = millis();
+
+  // Quiet hours: turn display off and deep sleep after 5-minute post-reboot grace period
+  if (!netState.apMode && !otaInProgress && isQuietHours(cfg, netState.timeSynced)) {
+    if (wokeFromDeepSleep || now >= QUIET_SLEEP_GRACE_MS) {
+      enterQuietDeepSleep();
+    }
+  }
 
   // Render screen every 1s (or immediately when invalidated) before blocking network polls
   if (!netState.apMode && (lastRenderMs == 0 || (now - lastRenderMs) >= 1000UL)) {

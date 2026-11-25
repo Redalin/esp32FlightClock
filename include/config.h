@@ -29,6 +29,7 @@
 #define WEATHER_POLL_INTERVAL_MS (10UL * 60UL * 1000UL) // 10 minutes
 #define FLIGHT_ACTIVE_POLL_MS    (5UL * 1000UL)        // Poll every 5s while tracking a flight
 #define FLIGHT_HOLD_MS           (15UL * 1000UL)       // Keep flight screen 15s after last seen
+#define QUIET_SLEEP_GRACE_MS     (5UL * 60UL * 1000UL) // 5 minutes after reboot before deep sleep
 
 struct AppConfig {
   // Wi-Fi

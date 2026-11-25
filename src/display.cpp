@@ -1,6 +1,7 @@
 #include "display.h"
 #include <LovyanGFX.hpp>
 #include <ctype.h>
+#include <driver/gpio.h>
 #include <math.h>
 #include <time.h>
 
@@ -373,6 +374,7 @@ void formatThousands(int32_t val, char* out, size_t outSize) {
 namespace Display {
 
 void init(uint8_t brightness) {
+  gpio_hold_dis(static_cast<gpio_num_t>(BACKLIGHT_PIN));
   tft.init();
   tft.setRotation(0);
   tft.setBrightness(brightness);
@@ -397,6 +399,16 @@ void setOffset(int8_t offsetX, int8_t offsetY) {
   if (spriteReady && activeScreen != ScreenMode::NONE) {
     pushFrame();
   }
+}
+
+void sleep() {
+  tft.setBrightness(0);
+  tft.fillScreen(COL_BG);
+  tft.sleep();
+  pinMode(BACKLIGHT_PIN, OUTPUT);
+  digitalWrite(BACKLIGHT_PIN, LOW);
+  gpio_hold_en(static_cast<gpio_num_t>(BACKLIGHT_PIN));
+  gpio_deep_sleep_hold_en();
 }
 
 void showBootScreen(const char* statusLine) {
