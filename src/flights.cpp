@@ -1,8 +1,11 @@
 #include "flights.h"
+#include "logger.h"
 #include <ArduinoJson.h>
 #include <HTTPClient.h>
+#include <Preferences.h>
 #include <WiFiClientSecure.h>
 #include <math.h>
+#include <stddef.h>
 
 namespace {
 
@@ -50,6 +53,7 @@ struct HostBackoff {
   uint8_t streak = 0;
 };
 
+HostBackoff adsbFiBackoff;
 HostBackoff airplanesBackoff;
 HostBackoff adsbLolBackoff;
 
@@ -79,10 +83,10 @@ void recordFailure(HostBackoff& b, int httpCode, const char* host, unsigned long
   }
   if (backoffMs > 0) {
     b.cooldownUntilMs = now + backoffMs;
-    Serial.printf("[Flights] %s returned HTTP %d; backing off for %lus\n",
-                  host,
-                  httpCode,
-                  backoffMs / 1000UL);
+    Log::printf("[Flights] %s returned HTTP %d; backing off for %lus\n",
+                host,
+                httpCode,
+                backoffMs / 1000UL);
   }
 }
 
@@ -294,15 +298,159 @@ private:
   bool _error = false;
 };
 
+enum class RouteCacheStatus : uint8_t {
+  EMPTY = 0,
+  FOUND,
+  NOT_FOUND,
+  RETRY_LATER
+};
+
 struct RouteCacheEntry {
   char callsign[16] = {0};
   char origin[8] = {0};
   char dest[8] = {0};
+  unsigned long expiresAtMs = 0;
+  unsigned long lastUsedMs = 0;
+  RouteCacheStatus status = RouteCacheStatus::EMPTY;
 };
 
-constexpr size_t kRouteCacheSize = 8;
+constexpr size_t kRouteCacheSize = 64;
+constexpr unsigned long kRouteFoundTtlMs = 24UL * 60UL * 60UL * 1000UL;   // 24 hours
+constexpr unsigned long kRouteNotFoundTtlMs = 2UL * 60UL * 60UL * 1000UL; // 2 hours
+constexpr unsigned long kRouteRetryTtlMs = 5UL * 60UL * 1000UL;           // 5 minutes on 429/net error
+constexpr char kRouteCacheNamespace[] = "routecache";
+constexpr char kRouteCacheKey[] = "v1";
+constexpr uint32_t kRouteCacheMagic = 0x52544331UL; // "RTC1"
+
+struct PersistedRouteRecord {
+  char callsign[12];
+  char origin[6];
+  char dest[6];
+};
+
+struct PersistedRouteBlob {
+  uint32_t magic;
+  uint16_t count;
+  uint16_t reserved;
+  PersistedRouteRecord entries[kRouteCacheSize];
+};
+
 RouteCacheEntry routeCache[kRouteCacheSize];
-size_t routeCacheNext = 0;
+PersistedRouteBlob persistedRouteBlob;
+bool routeCacheLoaded = false;
+
+bool isRouteEntryFresh(const RouteCacheEntry& e, unsigned long now) {
+  return e.status != RouteCacheStatus::EMPTY &&
+         static_cast<long>(now - e.expiresAtMs) < 0;
+}
+
+void ensureRouteCacheLoaded(unsigned long now) {
+  if (routeCacheLoaded) {
+    return;
+  }
+  routeCacheLoaded = true;
+
+  Preferences prefs;
+  if (!prefs.begin(kRouteCacheNamespace, true)) {
+    return;
+  }
+  size_t len = prefs.getBytesLength(kRouteCacheKey);
+  constexpr size_t kHeaderSize = offsetof(PersistedRouteBlob, entries);
+  if (len < kHeaderSize || len > sizeof(PersistedRouteBlob)) {
+    prefs.end();
+    return;
+  }
+  size_t readLen = prefs.getBytes(kRouteCacheKey, &persistedRouteBlob, len);
+  prefs.end();
+
+  if (readLen != len || persistedRouteBlob.magic != kRouteCacheMagic ||
+      persistedRouteBlob.count > kRouteCacheSize) {
+    return;
+  }
+  size_t expectedLen = kHeaderSize + persistedRouteBlob.count * sizeof(PersistedRouteRecord);
+  if (readLen != expectedLen) {
+    return;
+  }
+
+  size_t loaded = 0;
+  for (uint16_t i = 0; i < persistedRouteBlob.count; ++i) {
+    const PersistedRouteRecord& rec = persistedRouteBlob.entries[i];
+    if (rec.callsign[0] == '\0' || rec.origin[0] == '\0' || rec.dest[0] == '\0') {
+      continue;
+    }
+    RouteCacheEntry& slot = routeCache[loaded];
+    strlcpy(slot.callsign, rec.callsign, sizeof(slot.callsign));
+    strlcpy(slot.origin, rec.origin, sizeof(slot.origin));
+    strlcpy(slot.dest, rec.dest, sizeof(slot.dest));
+    slot.status = RouteCacheStatus::FOUND;
+    slot.expiresAtMs = now + kRouteFoundTtlMs;
+    slot.lastUsedMs = now - (persistedRouteBlob.count - i);
+    ++loaded;
+  }
+  if (loaded > 0) {
+    Log::printf("[Routes] Loaded %u cached routes from NVS\n", static_cast<unsigned>(loaded));
+  }
+}
+
+void saveRouteCacheToNvs() {
+  uint16_t count = 0;
+  for (size_t i = 0; i < kRouteCacheSize; ++i) {
+    const RouteCacheEntry& e = routeCache[i];
+    if (e.status != RouteCacheStatus::FOUND || e.callsign[0] == '\0' ||
+        e.origin[0] == '\0' || e.dest[0] == '\0') {
+      continue;
+    }
+    PersistedRouteRecord& rec = persistedRouteBlob.entries[count++];
+    strlcpy(rec.callsign, e.callsign, sizeof(rec.callsign));
+    strlcpy(rec.origin, e.origin, sizeof(rec.origin));
+    strlcpy(rec.dest, e.dest, sizeof(rec.dest));
+  }
+
+  persistedRouteBlob.magic = kRouteCacheMagic;
+  persistedRouteBlob.count = count;
+  persistedRouteBlob.reserved = 0;
+
+  Preferences prefs;
+  if (!prefs.begin(kRouteCacheNamespace, false)) {
+    return;
+  }
+  size_t blobSize = offsetof(PersistedRouteBlob, entries) + count * sizeof(PersistedRouteRecord);
+  prefs.putBytes(kRouteCacheKey, &persistedRouteBlob, blobSize);
+  prefs.end();
+}
+
+size_t selectRouteCacheSlot(int existingIdx, unsigned long now) {
+  if (existingIdx >= 0) {
+    return static_cast<size_t>(existingIdx);
+  }
+  for (size_t i = 0; i < kRouteCacheSize; ++i) {
+    if (routeCache[i].status == RouteCacheStatus::EMPTY) {
+      return i;
+    }
+  }
+
+  // Prefer evicting expired or non-FOUND entries before evicting active FOUND routes;
+  // break ties by least-recently-used.
+  auto evictPriority = [&](const RouteCacheEntry& e) -> uint8_t {
+    if (!isRouteEntryFresh(e, now)) return 0;
+    if (e.status == RouteCacheStatus::RETRY_LATER) return 1;
+    if (e.status == RouteCacheStatus::NOT_FOUND) return 2;
+    return 3; // Fresh FOUND route
+  };
+
+  size_t victim = 0;
+  uint8_t victimPrio = evictPriority(routeCache[0]);
+  for (size_t i = 1; i < kRouteCacheSize; ++i) {
+    uint8_t prio = evictPriority(routeCache[i]);
+    if (prio < victimPrio ||
+        (prio == victimPrio &&
+         static_cast<long>(routeCache[i].lastUsedMs - routeCache[victim].lastUsedMs) < 0)) {
+      victim = i;
+      victimPrio = prio;
+    }
+  }
+  return victim;
+}
 
 enum class RouteLookupResult : uint8_t {
   FOUND = 0,
@@ -505,11 +653,23 @@ void fetchRoute(const char* callsign,
     return;
   }
 
+  unsigned long now = millis();
+  ensureRouteCacheLoaded(now);
+
+  int existingIdx = -1;
   for (size_t i = 0; i < kRouteCacheSize; ++i) {
-    if (strcmp(callsign, routeCache[i].callsign) == 0) {
-      strlcpy(originOut, routeCache[i].origin, originSize);
-      strlcpy(destOut, routeCache[i].dest, destSize);
-      return;
+    if (routeCache[i].status != RouteCacheStatus::EMPTY &&
+        strcmp(callsign, routeCache[i].callsign) == 0) {
+      existingIdx = static_cast<int>(i);
+      if (isRouteEntryFresh(routeCache[i], now)) {
+        routeCache[i].lastUsedMs = now;
+        if (routeCache[i].status == RouteCacheStatus::FOUND) {
+          strlcpy(originOut, routeCache[i].origin, originSize);
+          strlcpy(destOut, routeCache[i].dest, destSize);
+        }
+        return;
+      }
+      break;
     }
   }
 
@@ -521,15 +681,38 @@ void fetchRoute(const char* callsign,
     r2 = fetchRouteFromAdsbLol(callsign, lat, lon, origBuf, sizeof(origBuf), destBuf, sizeof(destBuf));
   }
 
-  // Only cache negative results when neither lookup failed due to a transient network error
-  bool cacheResult = (r1 == RouteLookupResult::FOUND || r2 == RouteLookupResult::FOUND) ||
-                     (r1 == RouteLookupResult::NOT_FOUND && r2 == RouteLookupResult::NOT_FOUND);
-  if (cacheResult) {
-    RouteCacheEntry& slot = routeCache[routeCacheNext];
-    routeCacheNext = (routeCacheNext + 1) % kRouteCacheSize;
-    strlcpy(slot.callsign, callsign, sizeof(slot.callsign));
-    strlcpy(slot.origin, origBuf, sizeof(slot.origin));
-    strlcpy(slot.dest, destBuf, sizeof(slot.dest));
+  RouteCacheStatus newStatus = RouteCacheStatus::RETRY_LATER;
+  unsigned long ttlMs = kRouteRetryTtlMs;
+  if (r1 == RouteLookupResult::FOUND || r2 == RouteLookupResult::FOUND) {
+    newStatus = RouteCacheStatus::FOUND;
+    ttlMs = kRouteFoundTtlMs;
+  } else if (r1 == RouteLookupResult::NOT_FOUND && r2 == RouteLookupResult::NOT_FOUND) {
+    newStatus = RouteCacheStatus::NOT_FOUND;
+    ttlMs = kRouteNotFoundTtlMs;
+  }
+
+  now = millis();
+  size_t slotIdx = selectRouteCacheSlot(existingIdx, now);
+  RouteCacheEntry& slot = routeCache[slotIdx];
+
+  bool shouldPersist = false;
+  if (newStatus == RouteCacheStatus::FOUND) {
+    bool sameAsExisting = (slot.status == RouteCacheStatus::FOUND &&
+                           strcmp(slot.callsign, callsign) == 0 &&
+                           strcmp(slot.origin, origBuf) == 0 &&
+                           strcmp(slot.dest, destBuf) == 0);
+    shouldPersist = !sameAsExisting;
+  }
+
+  strlcpy(slot.callsign, callsign, sizeof(slot.callsign));
+  strlcpy(slot.origin, origBuf, sizeof(slot.origin));
+  strlcpy(slot.dest, destBuf, sizeof(slot.dest));
+  slot.status = newStatus;
+  slot.expiresAtMs = now + ttlMs;
+  slot.lastUsedMs = now;
+
+  if (shouldPersist) {
+    saveRouteCacheToNvs();
   }
 
   strlcpy(originOut, origBuf, originSize);
@@ -543,14 +726,27 @@ bool fetchFromHost(const char* host,
                    const JsonDocument& filter,
                    JsonDocument& docOut,
                    int& httpCodeOut) {
+  const bool isAdsbFi = (strcmp(host, "opendata.adsb.fi") == 0);
+  const bool isAdsbLol = (strcmp(host, "api.adsb.lol") == 0);
+
   char url[192];
-  snprintf(url,
-           sizeof(url),
-           "https://%s/v2/point/%.4f/%.4f/%.1f",
-           host,
-           lat,
-           lon,
-           radiusNm);
+  if (isAdsbFi) {
+    snprintf(url,
+             sizeof(url),
+             "https://%s/api/v3/lat/%.4f/lon/%.4f/dist/%.1f",
+             host,
+             lat,
+             lon,
+             radiusNm);
+  } else {
+    snprintf(url,
+             sizeof(url),
+             "https://%s/v2/point/%.4f/%.4f/%.1f",
+             host,
+             lat,
+             lon,
+             radiusNm);
+  }
 
   if (!flightClientInit) {
     flightTlsClient.setInsecure();
@@ -565,10 +761,9 @@ bool fetchFromHost(const char* host,
 
   flightHttp.setConnectTimeout(4000);
   flightHttp.setTimeout(5000);
-  const bool isAdsbLol = (strcmp(host, "api.adsb.lol") == 0);
-  flightHttp.setUserAgent(isAdsbLol ? "ESP32-FlightClock/1.0" : "curl/8.5.0");
+  flightHttp.setUserAgent((isAdsbFi || isAdsbLol) ? "ESP32-FlightClock/1.0" : "curl/8.5.0");
   if (!flightHttp.begin(flightTlsClient, url)) {
-    Serial.printf("[Flights] http.begin failed (%s)\n", host);
+    Log::printf("[Flights] http.begin failed (%s)\n", host);
     closeFlightConnection();
     httpCodeOut = -1;
     return false;
@@ -582,11 +777,11 @@ bool fetchFromHost(const char* host,
 
   httpCodeOut = flightHttp.GET();
   if (httpCodeOut != HTTP_CODE_OK) {
-    Serial.printf("[Flights] HTTP %d (%s) from %s (freeHeap=%u)\n",
-                  httpCodeOut,
-                  flightHttp.errorToString(httpCodeOut).c_str(),
-                  host,
-                  static_cast<unsigned>(ESP.getFreeHeap()));
+    Log::printf("[Flights] HTTP %d (%s) from %s (freeHeap=%u)\n",
+                httpCodeOut,
+                flightHttp.errorToString(httpCodeOut).c_str(),
+                host,
+                static_cast<unsigned>(ESP.getFreeHeap()));
     closeFlightConnection();
     return false;
   }
@@ -600,7 +795,7 @@ bool fetchFromHost(const char* host,
   if (err || !cleanEof || bodyStream.hadError()) {
     closeFlightConnection();
     if (err) {
-      Serial.printf("[Flights] JSON error from %s: %s\n", host, err.c_str());
+      Log::printf("[Flights] JSON error from %s: %s\n", host, err.c_str());
       return false;
     }
   }
@@ -627,59 +822,101 @@ bool fetchClosest(const AppConfig& cfg, FlightInfo& out) {
   static JsonDocument filter;
   static bool filterInit = false;
   if (!filterInit) {
-    JsonObject acFilter = filter["ac"].add<JsonObject>();
-    acFilter["flight"] = true;
-    acFilter["r"] = true;
-    acFilter["t"] = true;
-    acFilter["alt_baro"] = true;
-    acFilter["gs"] = true;
-    acFilter["track"] = true;
-    acFilter["baro_rate"] = true;
-    acFilter["lat"] = true;
-    acFilter["lon"] = true;
+    auto addPlaneFields = [](JsonObject obj) {
+      obj["flight"] = true;
+      obj["r"] = true;
+      obj["t"] = true;
+      obj["alt_baro"] = true;
+      obj["gs"] = true;
+      obj["track"] = true;
+      obj["baro_rate"] = true;
+      obj["lat"] = true;
+      obj["lon"] = true;
+    };
+    addPlaneFields(filter["ac"].add<JsonObject>());
+    addPlaneFields(filter["aircraft"].add<JsonObject>());
     filterInit = true;
   }
 
-  bool primaryIsAdsbLol = (cfg.flightSource == "adsb.lol");
-  const char* primaryHost = primaryIsAdsbLol ? "api.adsb.lol" : "api.airplanes.live";
-  const char* fallbackHost = primaryIsAdsbLol ? "api.airplanes.live" : "api.adsb.lol";
-  HostBackoff& primaryBackoff = primaryIsAdsbLol ? adsbLolBackoff : airplanesBackoff;
-  HostBackoff& fallbackBackoff = primaryIsAdsbLol ? airplanesBackoff : adsbLolBackoff;
+  const char* primaryHost = "opendata.adsb.fi";
+  const char* fallbackHost = nullptr;
+  HostBackoff* primaryBackoff = &adsbFiBackoff;
+  HostBackoff* fallbackBackoff = nullptr;
+
+  if (cfg.flightSource == "airplanes.live") {
+    primaryHost = "api.airplanes.live";
+    primaryBackoff = &airplanesBackoff;
+    fallbackHost = "opendata.adsb.fi";
+    fallbackBackoff = &adsbFiBackoff;
+  } else if (cfg.flightSource == "adsb.lol") {
+    primaryHost = "api.adsb.lol";
+    primaryBackoff = &adsbLolBackoff;
+    fallbackHost = "opendata.adsb.fi";
+    fallbackBackoff = &adsbFiBackoff;
+  }
 
   unsigned long now = millis();
   JsonDocument doc;
   bool gotDoc = false;
+  const char* usedHost = nullptr;
+  bool primaryInBackoff = isCooldownActive(*primaryBackoff, now);
+  bool fallbackInBackoff = fallbackBackoff ? isCooldownActive(*fallbackBackoff, now) : true;
 
-  if (!isCooldownActive(primaryBackoff, now)) {
+  if (!primaryInBackoff) {
     int code = 0;
     if (fetchFromHost(primaryHost, cfg.latitude, cfg.longitude, radiusNm, filter, doc, code)) {
-      recordSuccess(primaryBackoff);
+      recordSuccess(*primaryBackoff);
       gotDoc = true;
+      usedHost = primaryHost;
     } else {
-      recordFailure(primaryBackoff, code, primaryHost, now);
+      now = millis();
+      recordFailure(*primaryBackoff, code, primaryHost, now);
     }
   }
 
-  if (!gotDoc && !isCooldownActive(fallbackBackoff, now)) {
+  if (!gotDoc && fallbackHost && !fallbackInBackoff) {
     int code = 0;
     if (fetchFromHost(fallbackHost, cfg.latitude, cfg.longitude, radiusNm, filter, doc, code)) {
-      recordSuccess(fallbackBackoff);
+      recordSuccess(*fallbackBackoff);
       gotDoc = true;
+      usedHost = fallbackHost;
     } else {
-      recordFailure(fallbackBackoff, code, fallbackHost, now);
+      now = millis();
+      recordFailure(*fallbackBackoff, code, fallbackHost, now);
     }
   }
 
+  static bool lastPollWasEmpty = false;
+  static unsigned long lastBackoffLogMs = 0;
+
   if (!gotDoc) {
+    lastPollWasEmpty = false;
+    if (primaryInBackoff && fallbackInBackoff &&
+        (lastBackoffLogMs == 0 || (now - lastBackoffLogMs) >= 60000UL)) {
+      lastBackoffLogMs = now;
+      if (fallbackHost) {
+        Log::println("[Flights] Poll skipped: both feeds in backoff");
+      } else {
+        Log::printf("[Flights] Poll skipped: %s in backoff\n", primaryHost);
+      }
+    }
     return false;
   }
 
   JsonArray ac = doc["ac"].as<JsonArray>();
+  if (ac.isNull()) {
+    ac = doc["aircraft"].as<JsonArray>();
+  }
   if (ac.isNull() || ac.size() == 0) {
+    if (!lastPollWasEmpty) {
+      Log::printf("[Flights] %s: 0 aircraft within %.1fkm\n", usedHost, cfg.searchRadiusKm);
+      lastPollWasEmpty = true;
+    }
     out.active = false;
     out.totalInRange = 0;
     return true;
   }
+  lastPollWasEmpty = false;
 
   float bestDistKm = 1e9f;
   int countInRange = 0;
@@ -688,23 +925,52 @@ bool fetchClosest(const AppConfig& cfg, FlightInfo& out) {
   double bestLat = 0.0;
   double bestLon = 0.0;
 
+  unsigned int noPosCount = 0;
+  unsigned int groundCount = 0;
+  unsigned int altCount = 0;
+  unsigned int distCount = 0;
+  float skippedBestDistKm = 1e9f;
+  char skippedCallsign[16] = {0};
+  int32_t skippedAltFt = 0;
+  const char* skippedReason = nullptr;
+
+  auto recordSkipped = [&](JsonObject& plane, float distKm, int32_t altFt, const char* reason) {
+    if (distKm < skippedBestDistKm) {
+      skippedBestDistKm = distKm;
+      copyTrimmed(skippedCallsign, sizeof(skippedCallsign), plane["flight"] | "");
+      if (skippedCallsign[0] == '\0') {
+        copyTrimmed(skippedCallsign, sizeof(skippedCallsign), plane["r"] | "UNKNOWN");
+      }
+      skippedAltFt = altFt;
+      skippedReason = reason;
+    }
+  };
+
   for (JsonObject plane : ac) {
     if (!plane["lat"].is<double>() || !plane["lon"].is<double>()) {
+      ++noPosCount;
       continue;
     }
+    double pLat = plane["lat"].as<double>();
+    double pLon = plane["lon"].as<double>();
+    float distKm = haversineKm(cfg.latitude, cfg.longitude, pLat, pLon);
+
     // Skip aircraft explicitly reported on the ground
     if (plane["alt_baro"].is<const char*>()) {
+      ++groundCount;
+      recordSkipped(plane, distKm, 0, "ground");
       continue;
     }
     int32_t altFt = plane["alt_baro"] | 0;
     if (altFt <= 0 || altFt > cfg.maxAltitudeFt) {
+      ++altCount;
+      recordSkipped(plane, distKm, altFt, altFt <= 0 ? "alt<=0" : "alt>max");
       continue;
     }
 
-    double pLat = plane["lat"].as<double>();
-    double pLon = plane["lon"].as<double>();
-    float distKm = haversineKm(cfg.latitude, cfg.longitude, pLat, pLon);
     if (distKm > cfg.searchRadiusKm) {
+      ++distCount;
+      recordSkipped(plane, distKm, altFt, "dist>rad");
       continue;
     }
 
@@ -741,6 +1007,24 @@ bool fetchClosest(const AppConfig& cfg, FlightInfo& out) {
     best.totalInRange = countInRange;
     out = best;
   } else {
+    if (skippedReason) {
+      Log::printf("[Flights] %u from %s, 0 matched (gnd=%u alt=%u dist=%u noPos=%u; nearest=%s %.1fkm %ldft [%s])\n",
+                  static_cast<unsigned>(ac.size()),
+                  usedHost,
+                  groundCount,
+                  altCount,
+                  distCount,
+                  noPosCount,
+                  skippedCallsign,
+                  skippedBestDistKm,
+                  static_cast<long>(skippedAltFt),
+                  skippedReason);
+    } else {
+      Log::printf("[Flights] %u from %s, 0 matched (noPos=%u)\n",
+                  static_cast<unsigned>(ac.size()),
+                  usedHost,
+                  noPosCount);
+    }
     out.active = false;
     out.totalInRange = 0;
   }

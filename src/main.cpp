@@ -11,6 +11,7 @@
 #include "config.h"
 #include "display.h"
 #include "flights.h"
+#include "logger.h"
 #include "storage.h"
 #include "weather.h"
 #include "web_server.h"
@@ -67,9 +68,9 @@ void startMdns() {
 #else
     MDNS.enableArduino(3232, false);
 #endif
-    Serial.printf("[mDNS] http://%s.local (HTTP + OTA registered)\n", MDNS_HOSTNAME);
+    Log::printf("[mDNS] http://%s.local (HTTP + OTA registered)\n", MDNS_HOSTNAME);
   } else {
-    Serial.println("[mDNS] Failed to start responder");
+    Log::println("[mDNS] Failed to start responder");
   }
 }
 
@@ -86,7 +87,7 @@ void setupOta() {
       netOtaActive = true;
       netResetConn = true;
       digitalWrite(LED_PIN, LOW);
-      Serial.println("[OTA] Start updating firmware");
+      Log::println("[OTA] Start updating firmware");
       Display::showOtaScreen(0, "Starting OTA...");
     });
     ArduinoOTA.onProgress([](unsigned int progress, unsigned int total) {
@@ -98,7 +99,7 @@ void setupOta() {
       }
     });
     ArduinoOTA.onEnd([]() {
-      Serial.println("\n[OTA] Complete, rebooting...");
+      Log::println("[OTA] Complete, rebooting...");
       Display::showOtaScreen(100, "Rebooting...");
       delay(300);
     });
@@ -112,14 +113,14 @@ void setupOta() {
       else if (error == OTA_CONNECT_ERROR) errText = "Connect Failed";
       else if (error == OTA_RECEIVE_ERROR) errText = "Receive Failed";
       else if (error == OTA_END_ERROR) errText = "End Failed";
-      Serial.printf("[OTA] Error[%u]: %s\n", static_cast<unsigned>(error), errText);
+      Log::printf("[OTA] Error[%u]: %s\n", static_cast<unsigned>(error), errText);
       Display::showOtaScreen(0, errText);
       delay(1500);
       lastRenderMs = 0;
     });
   }
   ArduinoOTA.begin();
-  Serial.printf("[OTA] Ready on %s.local:3232\n", MDNS_HOSTNAME);
+  Log::printf("[OTA] Ready on %s.local:3232\n", MDNS_HOSTNAME);
 }
 
 void applyTimezone() {
@@ -170,9 +171,9 @@ void enterQuietDeepSleep() {
     deltaSec = 15;
   }
 
-  Serial.printf("[Sleep] Quiet hours active; display off & deep sleep for %d s (until %02u:00)\n",
-                deltaSec,
-                static_cast<unsigned>(cfg.quietEndHour));
+  Log::printf("[Sleep] Quiet hours active; display off & deep sleep for %d s (until %02u:00)\n",
+              deltaSec,
+              static_cast<unsigned>(cfg.quietEndHour));
   Serial.flush();
 
   pauseNetTaskForShutdown();
@@ -241,10 +242,10 @@ void netPollTask(void*) {
       if (Weather::fetch(localCfg, localWeather)) {
         weatherFetchedOnce = true;
         weatherNextIntervalMs = WEATHER_POLL_INTERVAL_MS;
-        Serial.printf("[Weather] %.1f C, %s (RH %d%%)\n",
-                      localWeather.tempC,
-                      Weather::describeCode(localWeather.weatherCode),
-                      localWeather.humidity);
+        Log::printf("[Weather] %.1f C, %s (RH %d%%)\n",
+                    localWeather.tempC,
+                    Weather::describeCode(localWeather.weatherCode),
+                    localWeather.humidity);
         if (netMutex && xSemaphoreTake(netMutex, pdMS_TO_TICKS(200)) == pdTRUE) {
           netWeatherResult = localWeather;
           netWeatherUpdated = true;
@@ -259,7 +260,7 @@ void netPollTask(void*) {
             weatherNextIntervalMs = WEATHER_RETRY_MAX_MS;
           }
         }
-        Serial.printf("[Weather] Fetch failed; retrying in %lus\n", weatherNextIntervalMs / 1000UL);
+        Log::printf("[Weather] Fetch failed; retrying in %lus\n", weatherNextIntervalMs / 1000UL);
       }
     }
 
@@ -280,7 +281,7 @@ void netPollTask(void*) {
           netFlightCleared = true;
           xSemaphoreGive(netMutex);
         }
-        Serial.println("[Flight] Quiet hours active, returning to clock");
+        Log::println("[Flight] Quiet hours active, returning to clock");
       }
     } else {
       unsigned long flightIntervalMs = localFlightActive
@@ -293,13 +294,13 @@ void netPollTask(void*) {
           if (latest.active) {
             localFlightActive = true;
             localFlightLastSeenMs = latest.lastSeenMs;
-            Serial.printf("[Flight] %s (%s) %s->%s alt=%ldft dist=%.1fkm\n",
-                          latest.callsign,
-                          latest.aircraftType,
-                          latest.origin[0] ? latest.origin : "?",
-                          latest.destination[0] ? latest.destination : "?",
-                          static_cast<long>(latest.altitudeFt),
-                          latest.distanceKm);
+            Log::printf("[Flight] %s (%s) %s->%s alt=%ldft dist=%.1fkm\n",
+                        latest.callsign,
+                        latest.aircraftType,
+                        latest.origin[0] ? latest.origin : "?",
+                        latest.destination[0] ? latest.destination : "?",
+                        static_cast<long>(latest.altitudeFt),
+                        latest.distanceKm);
             if (netMutex && xSemaphoreTake(netMutex, pdMS_TO_TICKS(200)) == pdTRUE) {
               netFlightResult = latest;
               netFlightUpdated = true;
@@ -312,7 +313,7 @@ void netPollTask(void*) {
               netFlightCleared = true;
               xSemaphoreGive(netMutex);
             }
-            Serial.println("[Flight] Cleared, returning to clock");
+            Log::println("[Flight] Cleared, returning to clock");
           }
         }
       }
@@ -339,25 +340,25 @@ void registerWifiEvents() {
         staGotIpEvent = true;
         break;
       case ARDUINO_EVENT_WIFI_STA_DISCONNECTED:
-        Serial.printf("\n[WiFi] STA disconnected reason=%d\n",
-                      info.wifi_sta_disconnected.reason);
+        Log::printf("[WiFi] STA disconnected reason=%d\n",
+                    info.wifi_sta_disconnected.reason);
         netResetConn = true;
         break;
       case ARDUINO_EVENT_WIFI_AP_START:
-        Serial.println("[WiFi] AP_START");
+        Log::println("[WiFi] AP_START");
         break;
       case ARDUINO_EVENT_WIFI_AP_STOP:
-        Serial.println("[WiFi] AP_STOP");
+        Log::println("[WiFi] AP_STOP");
         break;
       case ARDUINO_EVENT_WIFI_AP_STACONNECTED:
-        Serial.println("[WiFi] AP client connected");
+        Log::println("[WiFi] AP client connected");
         break;
       case ARDUINO_EVENT_WIFI_AP_STAIPASSIGNED:
-        Serial.printf("[WiFi] AP client IP: %s\n",
-                      IPAddress(info.wifi_ap_staipassigned.ip.addr).toString().c_str());
+        Log::printf("[WiFi] AP client IP: %s\n",
+                    IPAddress(info.wifi_ap_staipassigned.ip.addr).toString().c_str());
         break;
       case ARDUINO_EVENT_WIFI_AP_STADISCONNECTED:
-        Serial.println("[WiFi] AP client disconnected");
+        Log::println("[WiFi] AP client disconnected");
         break;
       default:
         break;
@@ -368,7 +369,7 @@ void registerWifiEvents() {
 bool connectWifiSta(uint32_t timeoutMs = WIFI_CONNECT_TIMEOUT_MS,
                     uint8_t maxAttempts = WIFI_CONNECT_ATTEMPTS) {
   if (cfg.wifiSsid.isEmpty()) {
-    Serial.println("[WiFi] No SSID configured.");
+    Log::println("[WiFi] No SSID configured.");
     return false;
   }
 
@@ -394,11 +395,11 @@ bool connectWifiSta(uint32_t timeoutMs = WIFI_CONNECT_TIMEOUT_MS,
     }
     Display::showBootScreen(bootMsg);
 
-    Serial.printf("[WiFi] Attempt %u/%u joining \"%s\" (passLen=%u) ",
-                  static_cast<unsigned>(attempt),
-                  static_cast<unsigned>(maxAttempts),
-                  cfg.wifiSsid.c_str(),
-                  static_cast<unsigned>(cfg.wifiPass.length()));
+    Log::printf("[WiFi] Attempt %u/%u joining \"%s\" (passLen=%u)\n",
+                static_cast<unsigned>(attempt),
+                static_cast<unsigned>(maxAttempts),
+                cfg.wifiSsid.c_str(),
+                static_cast<unsigned>(cfg.wifiPass.length()));
 
     if (attempt > 1) {
       WiFi.disconnect(false);
@@ -418,17 +419,17 @@ bool connectWifiSta(uint32_t timeoutMs = WIFI_CONNECT_TIMEOUT_MS,
       applyWifiTxPower(cfg.wifiTxPowerDbm);
       int8_t actualQuarterDbm = 0;
       esp_wifi_get_max_tx_power(&actualQuarterDbm);
-      Serial.printf("[WiFi] Connected! IP: %s  Host: %s  RSSI: %d dBm  TxPower: %.2f dBm\n",
-                    WiFi.localIP().toString().c_str(),
-                    WiFi.getHostname(),
-                    WiFi.RSSI(),
-                    actualQuarterDbm * 0.25f);
+      Log::printf("[WiFi] Connected! IP: %s  Host: %s  RSSI: %d dBm  TxPower: %.2f dBm\n",
+                  WiFi.localIP().toString().c_str(),
+                  WiFi.getHostname(),
+                  WiFi.RSSI(),
+                  actualQuarterDbm * 0.25f);
       return true;
     }
 
-    Serial.printf("[WiFi] Attempt %u failed (status=%d)\n",
-                  static_cast<unsigned>(attempt),
-                  static_cast<int>(WiFi.status()));
+    Log::printf("[WiFi] Attempt %u failed (status=%d)\n",
+                static_cast<unsigned>(attempt),
+                static_cast<int>(WiFi.status()));
   }
 
   return false;
@@ -452,11 +453,11 @@ void startApPortal() {
   netState.wifiConnected = false;
   netState.apMode = true;
   netWifiConnected = false;
-  Serial.printf("[WiFi] SoftAP \"%s\" %s at http://%s (txPower=%d)\n",
-                AP_SSID,
-                apOk ? "started" : "FAILED",
-                WiFi.softAPIP().toString().c_str(),
-                static_cast<int>(WiFi.getTxPower()));
+  Log::printf("[WiFi] SoftAP \"%s\" %s at http://%s (txPower=%d)\n",
+              AP_SSID,
+              apOk ? "started" : "FAILED",
+              WiFi.softAPIP().toString().c_str(),
+              static_cast<int>(WiFi.getTxPower()));
   Display::showPortalScreen(AP_SSID, WiFi.softAPIP().toString().c_str());
 }
 
@@ -469,13 +470,13 @@ void setupNetwork() {
     startMdns();
     setupOta();
     applyTimezone();
-    Serial.printf("[NTP] Syncing time (TZ=%s)\n", cfg.timezone.c_str());
+    Log::printf("[NTP] Syncing time (TZ=%s)\n", cfg.timezone.c_str());
     Display::showBootScreen("Syncing time...");
   } else {
     startApPortal();
   }
   PortalServer::begin(cfg, weather, flight, netState);
-  Serial.println("[Web] Portal server listening on port 80");
+  Log::println("[Web] Portal server listening on port 80");
 }
 
 void triggerTestFlight() {
@@ -504,26 +505,27 @@ void setup() {
 
   Serial.begin(115200);
   delay(800); // Allow USB-CDC host to attach
+  Log::init();
   wokeFromDeepSleep = (esp_sleep_get_wakeup_cause() == ESP_SLEEP_WAKEUP_TIMER);
-  Serial.println("\n=== ESP32-C3 Flight Clock v" FW_VERSION " ===");
+  Log::println("=== ESP32-C3 Flight Clock v" FW_VERSION " ===");
   if (wokeFromDeepSleep) {
-    Serial.println("[Sleep] Woke from deep sleep timer");
+    Log::println("[Sleep] Woke from deep sleep timer");
   }
 
   Storage::load(cfg);
-  Serial.printf("[Cfg] SSID=\"%s\" txPwr=%.1fdBm GPS=%s (%.4f, %.4f) TZ=%s offset=(%d,%d)\n",
-                cfg.wifiSsid.c_str(),
-                cfg.wifiTxPowerDbm,
-                cfg.locationConfigured ? "yes" : "no",
-                cfg.latitude,
-                cfg.longitude,
-                cfg.timezone.c_str(),
-                static_cast<int>(cfg.displayOffsetX),
-                static_cast<int>(cfg.displayOffsetY));
+  Log::printf("[Cfg] SSID=\"%s\" txPwr=%.1fdBm GPS=%s (%.4f, %.4f) TZ=%s offset=(%d,%d)\n",
+              cfg.wifiSsid.c_str(),
+              cfg.wifiTxPowerDbm,
+              cfg.locationConfigured ? "yes" : "no",
+              cfg.latitude,
+              cfg.longitude,
+              cfg.timezone.c_str(),
+              static_cast<int>(cfg.displayOffsetX),
+              static_cast<int>(cfg.displayOffsetY));
 
   Display::init(cfg.brightness);
   Display::setOffset(cfg.displayOffsetX, cfg.displayOffsetY);
-  Serial.println("[Display] GC9A01 initialized");
+  Log::println("[Display] GC9A01 initialized");
   Display::showBootScreen("Starting up...");
 
   netMutex = xSemaphoreCreateMutex();
@@ -597,16 +599,16 @@ void loop() {
       if (!netState.timeSynced) {
         applyTimezone();
       }
-      Serial.printf("[WiFi] Link up: %s (RSSI %d dBm)\n",
-                    WiFi.localIP().toString().c_str(),
-                    WiFi.RSSI());
+      Log::printf("[WiFi] Link up: %s (RSSI %d dBm)\n",
+                  WiFi.localIP().toString().c_str(),
+                  WiFi.RSSI());
       lastRenderMs = 0;
     }
 
     if (!connectedNow && !anyOtaActive && !cfg.wifiSsid.isEmpty()) {
       if (lastReconnectAttemptMs == 0 || (now - lastReconnectAttemptMs) >= WIFI_RECONNECT_INTERVAL_MS) {
         lastReconnectAttemptMs = now;
-        Serial.println("[WiFi] Link down; attempting reconnect...");
+        Log::println("[WiFi] Link down; attempting reconnect...");
         applyWifiTxPower(cfg.wifiTxPowerDbm);
         WiFi.reconnect();
       }
@@ -622,7 +624,7 @@ void loop() {
         lastRenderMs = 0;
         char tBuf[24];
         strftime(tBuf, sizeof(tBuf), "%Y-%m-%d %H:%M:%S", &ti);
-        Serial.printf("[NTP] Time synced: %s\n", tBuf);
+        Log::printf("[NTP] Time synced: %s\n", tBuf);
       }
     }
   }
@@ -656,7 +658,7 @@ void loop() {
     } else if (wifiDisconnectedSinceMs == 0) {
       wifiDisconnectedSinceMs = now ? now : 1UL;
     } else if ((now - wifiDisconnectedSinceMs) >= WIFI_DISCONNECT_RESET_MS) {
-      Serial.println("[WiFi] Disconnected for 5 minutes with no hotspot clients; rebooting to retry Wi-Fi...");
+      Log::println("[WiFi] Disconnected for 5 minutes with no hotspot clients; rebooting to retry Wi-Fi...");
       Serial.flush();
       pauseNetTaskForShutdown(500);
       delay(200);

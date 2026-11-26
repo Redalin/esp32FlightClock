@@ -6,7 +6,7 @@
 #include <math.h>
 
 // Firmware release version (bump for every release; also appended to the compiled .bin filename)
-#define FW_VERSION "1.0.6"
+#define FW_VERSION "1.0.8"
 
 // ESP32-C3 Super Mini onboard LED (active LOW)
 #ifndef LED_PIN
@@ -61,7 +61,7 @@ struct AppConfig {
   float searchRadiusKm = 5.0f;
   uint16_t flightPollSec = 30;
   int32_t maxAltitudeFt = 5000;
-  String flightSource = "airplanes.live"; // "airplanes.live" or "adsb.lol"
+  String flightSource = "adsb.fi"; // "adsb.fi", "airplanes.live", or "adsb.lol"
   bool quietHoursEnabled = true;
   uint8_t quietStartHour = 1;       // 0..23 (local time)
   uint8_t quietEndHour = 6;         // 0..23 (local time)

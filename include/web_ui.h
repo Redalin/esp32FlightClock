@@ -520,6 +520,63 @@ const char WEB_UI_HTML[] PROGMEM = R"rawliteral(<!DOCTYPE html>
       border: 0;
       white-space: nowrap;
     }
+    .log-toolbar {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      justify-content: space-between;
+      gap: 0.5rem;
+      margin-bottom: 0.625rem;
+    }
+    .log-actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.4rem;
+    }
+    .log-actions button[aria-pressed="true"] {
+      border-color: var(--accent);
+      color: var(--accent);
+    }
+    .log-viewer {
+      --scrollbar-thumb: var(--muted);
+      --scrollbar-track: var(--bg);
+      margin: 0;
+      padding: 0.75rem;
+      min-height: 10rem;
+      max-height: 20rem;
+      overflow: auto;
+      background: var(--bg);
+      color: var(--text);
+      border: 1px solid var(--border);
+      border-radius: 0.5rem;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      font-size: 0.8rem;
+      line-height: 1.45;
+      white-space: pre-wrap;
+      word-break: break-word;
+      scrollbar-color: var(--scrollbar-thumb) var(--scrollbar-track);
+      scrollbar-width: thin;
+    }
+    .log-viewer:focus-visible {
+      outline: 3px solid var(--accent);
+      outline-offset: 2px;
+    }
+    @supports not (scrollbar-color: auto) {
+      .log-viewer {
+        scrollbar-width: auto;
+      }
+      .log-viewer::-webkit-scrollbar {
+        width: 8px;
+        height: 8px;
+      }
+      .log-viewer::-webkit-scrollbar-thumb {
+        background: var(--scrollbar-thumb);
+        border-radius: 999px;
+      }
+      .log-viewer::-webkit-scrollbar-track {
+        background: var(--scrollbar-track);
+      }
+    }
   </style>
 </head>
 <body>
@@ -746,8 +803,9 @@ const char WEB_UI_HTML[] PROGMEM = R"rawliteral(<!DOCTYPE html>
         <div class="field">
           <label for="flightSource">ADS-B Data Source</label>
           <select id="flightSource" name="flightSource">
-            <option value="adsb.lol">adsb.lol</option>
+            <option value="adsb.fi">adsb.fi (recommended)</option>
             <option value="airplanes.live">airplanes.live</option>
+            <option value="adsb.lol">adsb.lol</option>
           </select>
         </div>
 
@@ -792,6 +850,22 @@ const char WEB_UI_HTML[] PROGMEM = R"rawliteral(<!DOCTYPE html>
         <div class="actions">
           <button type="button" id="btn-ota">Upload Firmware</button>
         </div>
+      </div>
+    </details>
+
+    <details class="card-details" id="logs-card">
+      <summary>Device Logs</summary>
+      <div class="card-body">
+        <div class="log-toolbar">
+          <span id="log-status" class="hint" role="status" aria-live="polite">Closed (no background polling)</span>
+          <div class="log-actions">
+            <button type="button" id="btn-log-pause" class="btn-compact" aria-pressed="false">Pause</button>
+            <button type="button" id="btn-log-refresh" class="btn-compact">Refresh</button>
+            <button type="button" id="btn-log-copy" class="btn-compact">Copy</button>
+            <button type="button" id="btn-log-clear" class="btn-compact">Clear</button>
+          </div>
+        </div>
+        <pre id="log-output" class="log-viewer" role="log" aria-live="off" aria-label="Device log output" tabindex="0">Open to load recent logs...</pre>
       </div>
     </details>
   </main>
@@ -955,9 +1029,10 @@ const char WEB_UI_HTML[] PROGMEM = R"rawliteral(<!DOCTYPE html>
       scheduleToastDismiss();
     };
 
-    // Expand / Collapse all cards
+    // Expand / Collapse all cards (keep Device Logs opt-in so expanding does not start log polling)
     const toggleCardsBtn = document.getElementById('btn-toggle-cards');
-    const getCardDetails = () => Array.from(document.querySelectorAll('details.card-details'));
+    const logsCard = document.getElementById('logs-card');
+    const getCardDetails = () => Array.from(document.querySelectorAll('details.card-details:not(#logs-card)'));
     const syncToggleCardsBtn = () => {
       const allOpen = getCardDetails().every((d) => d.open);
       toggleCardsBtn.setAttribute('aria-expanded', String(allOpen));
@@ -965,6 +1040,7 @@ const char WEB_UI_HTML[] PROGMEM = R"rawliteral(<!DOCTYPE html>
     toggleCardsBtn.addEventListener('click', () => {
       const shouldOpen = toggleCardsBtn.getAttribute('aria-expanded') !== 'true';
       getCardDetails().forEach((d) => { d.open = shouldOpen; });
+      if (!shouldOpen && logsCard) logsCard.open = false;
       syncToggleCardsBtn();
     });
     document.addEventListener('toggle', (e) => {
@@ -1357,8 +1433,146 @@ const char WEB_UI_HTML[] PROGMEM = R"rawliteral(<!DOCTYPE html>
       }
     });
 
+    // On-demand Device Logs viewer (only polls while the logs card is open)
+    const logOut = document.getElementById('log-output');
+    const logStatus = document.getElementById('log-status');
+    const logPauseBtn = document.getElementById('btn-log-pause');
+    let logCursor = 0;
+    let logBuffer = '';
+    let logTimer = null;
+    let logAbort = null;
+    let logInFlight = false;
+    let logPaused = false;
+    const MAX_LOG_CHARS = 24000;
+
+    function setLogStatus(prefix) {
+      const nowStr = new Date().toLocaleTimeString([], { hour12: false });
+      logStatus.textContent = `${prefix} \u00b7 ${nowStr}`;
+    }
+
+    async function fetchLogs(manual = false) {
+      if (!logsCard.open || logInFlight) return;
+      if (!manual && (document.hidden || logPaused)) return;
+      logInFlight = true;
+      logAbort = new AbortController();
+      const timeoutId = setTimeout(() => logAbort.abort(), 5000);
+      try {
+        const res = await fetch(`/api/logs?since=${logCursor}`, {
+          signal: logAbort.signal,
+          cache: 'no-store'
+        });
+        const nextCursor = parseInt(res.headers.get('X-Log-Cursor') || '', 10);
+        const truncated = res.headers.get('X-Log-Truncated') === '1';
+        const wasAtBottom = (logOut.scrollHeight - logOut.scrollTop - logOut.clientHeight) < 28;
+        const firstLoad = (logCursor === 0);
+
+        if (res.status === 200) {
+          const chunk = await res.text();
+          if (firstLoad || truncated) {
+            logBuffer = chunk;
+          } else {
+            logBuffer += chunk;
+          }
+          if (logBuffer.length > MAX_LOG_CHARS) {
+            const cut = logBuffer.indexOf('\n', logBuffer.length - MAX_LOG_CHARS);
+            logBuffer = cut >= 0 ? logBuffer.slice(cut + 1) : logBuffer.slice(-MAX_LOG_CHARS);
+          }
+          logOut.textContent = logBuffer || '(No logs yet)';
+          if (firstLoad || wasAtBottom) {
+            logOut.scrollTop = logOut.scrollHeight;
+          }
+        } else if (res.status === 204 && firstLoad) {
+          logOut.textContent = '(No logs yet)';
+        }
+
+        if (Number.isFinite(nextCursor)) {
+          logCursor = nextCursor;
+        }
+        setLogStatus(logPaused ? 'Paused' : 'Live (3s)');
+      } catch (err) {
+        if (err && err.name !== 'AbortError') {
+          logStatus.textContent = 'Log fetch failed';
+        }
+      } finally {
+        clearTimeout(timeoutId);
+        logAbort = null;
+        logInFlight = false;
+      }
+    }
+
+    function stopLogPolling() {
+      if (logTimer) {
+        clearInterval(logTimer);
+        logTimer = null;
+      }
+      if (logAbort) {
+        logAbort.abort();
+        logAbort = null;
+      }
+    }
+
+    function startLogPolling() {
+      stopLogPolling();
+      if (!logsCard.open || logPaused) return;
+      logTimer = setInterval(() => fetchLogs(false), 3000);
+    }
+
+    logsCard.addEventListener('toggle', () => {
+      if (logsCard.open) {
+        fetchLogs(true);
+        startLogPolling();
+      } else {
+        stopLogPolling();
+        logStatus.textContent = 'Closed (no background polling)';
+      }
+    });
+
+    logPauseBtn.addEventListener('click', () => {
+      logPaused = !logPaused;
+      logPauseBtn.setAttribute('aria-pressed', String(logPaused));
+      logPauseBtn.textContent = logPaused ? 'Resume' : 'Pause';
+      if (logPaused) {
+        stopLogPolling();
+        setLogStatus('Paused');
+      } else if (logsCard.open) {
+        fetchLogs(true);
+        startLogPolling();
+      }
+    });
+
+    document.getElementById('btn-log-refresh').addEventListener('click', () => fetchLogs(true));
+
+    document.getElementById('btn-log-copy').addEventListener('click', async () => {
+      const text = logBuffer || logOut.textContent || '';
+      if (!text || text === '(No logs yet)') {
+        showBanner('No logs to copy yet.', false);
+        return;
+      }
+      try {
+        await navigator.clipboard.writeText(text);
+        showBanner('Logs copied to clipboard.', true);
+      } catch {
+        showBanner('Could not copy logs (clipboard unavailable over HTTP).', false);
+      }
+    });
+
+    document.getElementById('btn-log-clear').addEventListener('click', async () => {
+      try {
+        await fetch('/api/logs/clear', { method: 'POST' });
+        logBuffer = '';
+        logCursor = 0;
+        logOut.textContent = '(Logs cleared)';
+        setLogStatus(logPaused ? 'Paused' : 'Live (3s)');
+      } catch {
+        showBanner('Failed to clear logs.', false);
+      }
+    });
+
     document.addEventListener('visibilitychange', () => {
-      if (!document.hidden) loadStatus(true);
+      if (!document.hidden) {
+        loadStatus(true);
+        if (logsCard.open && !logPaused) fetchLogs(false);
+      }
     });
 
     loadConfig();

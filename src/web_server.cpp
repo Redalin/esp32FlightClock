@@ -1,5 +1,6 @@
 #include "web_server.h"
 #include "display.h"
+#include "logger.h"
 #include "storage.h"
 #if __has_include("web_ui_gz.h")
 #include "web_ui_gz.h"
@@ -152,7 +153,7 @@ void handlePostConfig() {
   }
 
   String src = server.arg("flightSource");
-  if (src == "airplanes.live" || src == "adsb.lol") {
+  if (src == "adsb.fi" || src == "airplanes.live" || src == "adsb.lol") {
     gCfg->flightSource = src;
   }
 
@@ -319,6 +320,33 @@ void handleReboot() {
   server.send(200, "application/json", "{\"ok\":true}");
 }
 
+void handleGetLogs() {
+  uint32_t since = 0;
+  if (server.hasArg("since")) {
+    since = static_cast<uint32_t>(strtoul(server.arg("since").c_str(), nullptr, 10));
+  }
+  String text;
+  bool truncated = false;
+  uint32_t cursor = Log::readSince(since, text, truncated);
+
+  server.sendHeader("Cache-Control", "no-store");
+  server.sendHeader("X-Log-Cursor", String(cursor));
+  if (truncated) {
+    server.sendHeader("X-Log-Truncated", "1");
+  }
+  if (text.isEmpty() && !truncated) {
+    server.send(204, "text/plain; charset=utf-8", "");
+  } else {
+    server.send(200, "text/plain; charset=utf-8", text);
+  }
+}
+
+void handleClearLogs() {
+  Log::clear();
+  server.sendHeader("Cache-Control", "no-store");
+  server.send(200, "application/json", "{\"ok\":true}");
+}
+
 bool otaUploadOk = false;
 String otaErrorMsg;
 size_t otaExpectedSize = 0;
@@ -336,23 +364,23 @@ void handleOtaUpload() {
     otaLastPct = 255;
     otaExpectedSize = static_cast<size_t>(server.arg("size").toInt());
 
-    Serial.printf("[WebOTA] Start: %s (expected=%u bytes)\n",
-                  upload.filename.c_str(),
-                  static_cast<unsigned>(otaExpectedSize));
+    Log::printf("[WebOTA] Start: %s (expected=%u bytes)\n",
+                upload.filename.c_str(),
+                static_cast<unsigned>(otaExpectedSize));
     digitalWrite(LED_PIN, LOW);
     Display::showOtaScreen(0, "Web OTA...");
 
     size_t updateSize = (otaExpectedSize > 0) ? otaExpectedSize : UPDATE_SIZE_UNKNOWN;
     if (!Update.begin(updateSize, U_FLASH)) {
       otaErrorMsg = Update.errorString();
-      Serial.printf("[WebOTA] begin failed: %s\n", otaErrorMsg.c_str());
+      Log::printf("[WebOTA] begin failed: %s\n", otaErrorMsg.c_str());
     }
   } else if (upload.status == UPLOAD_FILE_WRITE) {
     if (otaErrorMsg.isEmpty()) {
       size_t written = Update.write(upload.buf, upload.currentSize);
       if (written != upload.currentSize) {
         otaErrorMsg = Update.errorString();
-        Serial.printf("[WebOTA] write failed: %s\n", otaErrorMsg.c_str());
+        Log::printf("[WebOTA] write failed: %s\n", otaErrorMsg.c_str());
       } else {
         otaWritten += written;
         if (otaExpectedSize > 0) {
@@ -372,12 +400,12 @@ void handleOtaUpload() {
     if (otaErrorMsg.isEmpty()) {
       if (Update.end(true)) {
         otaUploadOk = true;
-        Serial.printf("[WebOTA] Success (%u bytes). Rebooting...\n",
-                      static_cast<unsigned>(otaWritten));
+        Log::printf("[WebOTA] Success (%u bytes). Rebooting...\n",
+                    static_cast<unsigned>(otaWritten));
         Display::showOtaScreen(100, "Rebooting...");
       } else {
         otaErrorMsg = Update.errorString();
-        Serial.printf("[WebOTA] end failed: %s\n", otaErrorMsg.c_str());
+        Log::printf("[WebOTA] end failed: %s\n", otaErrorMsg.c_str());
       }
     }
     if (!otaUploadOk) {
@@ -391,7 +419,7 @@ void handleOtaUpload() {
     otaUploadOk = false;
     otaErrorMsg = "Upload aborted";
     digitalWrite(LED_PIN, HIGH);
-    Serial.println("[WebOTA] Upload aborted");
+    Log::println("[WebOTA] Upload aborted");
     Display::showOtaScreen(0, "OTA Aborted");
   }
 }
@@ -443,6 +471,8 @@ void begin(AppConfig& cfg,
   server.on("/api/test-flight", HTTP_POST, handleTestFlight);
   server.on("/api/display-offset", HTTP_POST, handleDisplayOffset);
   server.on("/api/reboot", HTTP_POST, handleReboot);
+  server.on("/api/logs", HTTP_GET, handleGetLogs);
+  server.on("/api/logs/clear", HTTP_POST, handleClearLogs);
   server.on("/api/ota", HTTP_POST, handleOtaDone, handleOtaUpload);
   server.onNotFound(handleNotFound);
 

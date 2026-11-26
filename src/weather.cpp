@@ -1,4 +1,5 @@
 #include "weather.h"
+#include "logger.h"
 #include <ArduinoJson.h>
 #include <HTTPClient.h>
 #include <WiFiClientSecure.h>
@@ -51,16 +52,16 @@ bool fetch(const AppConfig& cfg, WeatherData& out) {
   http.setConnectTimeout(4000);
   http.setTimeout(6000);
   if (!http.begin(client, url)) {
-    Serial.println("[Weather] http.begin failed");
+    Log::println("[Weather] http.begin failed");
     return false;
   }
 
   int httpCode = http.GET();
   if (httpCode != HTTP_CODE_OK) {
-    Serial.printf("[Weather] HTTP %d (%s), freeHeap=%u\n",
-                  httpCode,
-                  http.errorToString(httpCode).c_str(),
-                  static_cast<unsigned>(ESP.getFreeHeap()));
+    Log::printf("[Weather] HTTP %d (%s), freeHeap=%u\n",
+                httpCode,
+                http.errorToString(httpCode).c_str(),
+                static_cast<unsigned>(ESP.getFreeHeap()));
     http.end();
     return false;
   }
@@ -81,7 +82,7 @@ bool fetch(const AppConfig& cfg, WeatherData& out) {
   http.end();
 
   if (err) {
-    Serial.printf("[Weather] JSON error: %s\n", err.c_str());
+    Log::printf("[Weather] JSON error: %s\n", err.c_str());
     return false;
   }
 
