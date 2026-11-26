@@ -54,6 +54,7 @@ void load(AppConfig& cfg) {
   cfg.brightness = prefs.getUChar("bright", defaults.brightness);
   cfg.displayOffsetX = clampDisplayOffset(prefs.getChar("offX", defaults.displayOffsetX));
   cfg.displayOffsetY = clampDisplayOffset(prefs.getChar("offY", defaults.displayOffsetY));
+  cfg.compassHeadingDeg = normalizeCompassHeading(prefs.getUShort("cmpDeg", defaults.compassHeadingDeg));
   cfg.searchRadiusKm = prefs.getFloat("radKm", defaults.searchRadiusKm);
   cfg.flightPollSec = prefs.getUShort("fPoll", defaults.flightPollSec);
   cfg.maxAltitudeFt = prefs.getInt("maxAlt", defaults.maxAltitudeFt);
@@ -84,6 +85,7 @@ void save(const AppConfig& cfg) {
   prefs.putUChar("bright", cfg.brightness);
   prefs.putChar("offX", clampDisplayOffset(cfg.displayOffsetX));
   prefs.putChar("offY", clampDisplayOffset(cfg.displayOffsetY));
+  prefs.putUShort("cmpDeg", normalizeCompassHeading(cfg.compassHeadingDeg));
   prefs.putFloat("radKm", cfg.searchRadiusKm);
   prefs.putUShort("fPoll", cfg.flightPollSec);
   prefs.putInt("maxAlt", cfg.maxAltitudeFt);

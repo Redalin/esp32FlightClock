@@ -669,10 +669,12 @@ void renderFlightScreen(const AppConfig& cfg, const FlightInfo& flight) {
   static int32_t lastBearingDeg = -1;
   static int lastTotalInRange = -1;
   static bool lastImperial = false;
+  static int16_t lastCompassHeadingDeg = -1;
   static char lastCallsign[16] = {0};
 
   int32_t distTenths = static_cast<int32_t>(roundf(flight.distanceKm * 10.0f));
   int32_t bearingInt = static_cast<int32_t>(roundf(flight.bearingDeg));
+  int16_t compassHeadingInt = static_cast<int16_t>(normalizeCompassHeading(cfg.compassHeadingDeg));
   if (activeScreen == ScreenMode::FLIGHT &&
       lastSeenMs == flight.lastSeenMs &&
       lastAltFt == flight.altitudeFt &&
@@ -680,6 +682,7 @@ void renderFlightScreen(const AppConfig& cfg, const FlightInfo& flight) {
       lastBearingDeg == bearingInt &&
       lastTotalInRange == flight.totalInRange &&
       lastImperial == cfg.useImperialDist &&
+      lastCompassHeadingDeg == compassHeadingInt &&
       strncmp(lastCallsign, flight.callsign, sizeof(lastCallsign)) == 0) {
     return;
   }
@@ -691,6 +694,7 @@ void renderFlightScreen(const AppConfig& cfg, const FlightInfo& flight) {
   lastBearingDeg = bearingInt;
   lastTotalInRange = flight.totalInRange;
   lastImperial = cfg.useImperialDist;
+  lastCompassHeadingDeg = compassHeadingInt;
   strlcpy(lastCallsign, flight.callsign, sizeof(lastCallsign));
 
   spr.fillSprite(COL_BG);
@@ -700,23 +704,25 @@ void renderFlightScreen(const AppConfig& cfg, const FlightInfo& flight) {
   spr.drawCircle(kCx, kCy, 111, COL_RING_DIM);
   spr.drawCircle(kCx, kCy, 80, COL_RADAR_DIM);
 
-  // Cardinal compass ticks & tiny N/E/S/W markers
+  // Cardinal compass ticks & tiny N/E/S/W markers (rotated so compassHeadingDeg points up)
+  const float headingOffset = static_cast<float>(compassHeadingInt);
   const char* cardLabels[4] = {"N", "E", "S", "W"};
   spr.setTextDatum(lgfx::middle_center);
-  spr.setTextColor(COL_TEAL, COL_BG);
   for (int i = 0; i < 4; ++i) {
-    float deg = i * 90.0f;
+    float deg = i * 90.0f - headingOffset;
     int x1, y1, x2, y2, lx, ly;
     polarToXY(kCx, kCy, 108.0f, deg, x1, y1);
     polarToXY(kCx, kCy, 116.0f, deg, x2, y2);
-    spr.drawLine(x1, y1, x2, y2, COL_TEAL);
+    uint16_t tickCol = (i == 0) ? COL_WHITE : COL_TEAL;
+    spr.drawLine(x1, y1, x2, y2, tickCol);
     polarToXY(kCx, kCy, 101.0f, deg, lx, ly);
+    spr.setTextColor(tickCol, COL_BG);
     drawText(cardLabels[i], lx, ly, &fonts::Font0);
   }
 
   // Bearing target blip on outer radar ring
   int bx, by;
-  polarToXY(kCx, kCy, 113.0f, flight.bearingDeg, bx, by);
+  polarToXY(kCx, kCy, 113.0f, flight.bearingDeg - headingOffset, bx, by);
   spr.drawCircle(bx, by, 8, COL_AMBER);
   spr.fillCircle(bx, by, 5, COL_AMBER);
   spr.fillCircle(bx, by, 2, COL_WHITE);
@@ -739,7 +745,7 @@ void renderFlightScreen(const AppConfig& cfg, const FlightInfo& flight) {
   int csW = spr.textWidth(callsign);
   int planeX = kCx - csW / 2 - 14;
   if (planeX > 36) {
-    drawPlaneIcon(planeX, 58, 0.9f, flight.trackDeg, COL_CYAN);
+    drawPlaneIcon(planeX, 58, 0.9f, flight.trackDeg - headingOffset, COL_CYAN);
   }
   spr.setTextColor(COL_WHITE, COL_BG);
   drawText(callsign, (planeX > 36) ? (kCx + 8) : kCx, 58, &fonts::Font4);

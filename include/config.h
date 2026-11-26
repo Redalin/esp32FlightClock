@@ -6,7 +6,7 @@
 #include <math.h>
 
 // Firmware release version (bump for every release; also appended to the compiled .bin filename)
-#define FW_VERSION "1.0.8"
+#define FW_VERSION "1.0.9"
 
 // ESP32-C3 Super Mini onboard LED (active LOW)
 #ifndef LED_PIN
@@ -56,6 +56,7 @@ struct AppConfig {
   uint8_t brightness = 220;     // 20..255
   int8_t displayOffsetX = 0;    // -30..30 px
   int8_t displayOffsetY = 0;    // -30..30 px
+  uint16_t compassHeadingDeg = 0; // 0..359 deg (direction at top of display; 0 = North up)
 
   // Flight Radar
   float searchRadiusKm = 5.0f;
@@ -83,4 +84,10 @@ inline int8_t clampDisplayOffset(int val) {
   if (val < -30) return -30;
   if (val > 30) return 30;
   return static_cast<int8_t>(val);
+}
+
+inline uint16_t normalizeCompassHeading(int val) {
+  int m = val % 360;
+  if (m < 0) m += 360;
+  return static_cast<uint16_t>(m);
 }

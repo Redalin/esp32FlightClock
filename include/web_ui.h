@@ -219,7 +219,8 @@ const char WEB_UI_HTML[] PROGMEM = R"rawliteral(<!DOCTYPE html>
     }
     :is(input:user-invalid, select:user-invalid, .user-invalid-fallback) + .error-msg,
     .input-row:has(:is(input:user-invalid, .user-invalid-fallback)) + .error-msg,
-    .offset-panel:has(:is(input:user-invalid, .user-invalid-fallback)) + .error-msg {
+    .offset-panel:has(:is(input:user-invalid, .user-invalid-fallback)) + .error-msg,
+    .compass-panel:has(:is(input:user-invalid, .user-invalid-fallback)) + .error-msg {
       display: block;
     }
     .input-row {
@@ -406,6 +407,69 @@ const char WEB_UI_HTML[] PROGMEM = R"rawliteral(<!DOCTYPE html>
     .offset-coord label {
       font-size: 0.82rem;
       color: var(--muted);
+    }
+    .field-label {
+      font-weight: 600;
+      font-size: 0.95rem;
+    }
+    .compass-panel {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 1rem;
+      margin-top: 0.35rem;
+    }
+    .compass-dial {
+      position: relative;
+      width: 10.5rem;
+      height: 10.5rem;
+      border-radius: 50%;
+      flex-shrink: 0;
+      background: var(--bg);
+      border: 2px solid var(--border);
+      cursor: grab;
+      touch-action: none;
+      -webkit-user-select: none;
+      user-select: none;
+    }
+    .compass-dial.dragging {
+      cursor: grabbing;
+      border-color: var(--accent);
+    }
+    .compass-dial:focus-visible {
+      outline: 3px solid var(--accent);
+      outline-offset: 3px;
+    }
+    .compass-dial svg {
+      display: block;
+      width: 100%;
+      height: 100%;
+      pointer-events: none;
+    }
+    .compass-controls {
+      flex: 1 1 11rem;
+      display: flex;
+      flex-direction: column;
+      gap: 0.5rem;
+    }
+    .compass-presets {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 0.35rem;
+    }
+    .compass-presets button {
+      min-height: 40px;
+      padding: 0.25rem 0;
+      font-size: 0.9rem;
+    }
+    .compass-presets button[aria-pressed="true"] {
+      border-color: var(--accent);
+      color: var(--accent);
+    }
+    @media (pointer: coarse) {
+      .compass-presets button {
+        min-height: 44px;
+      }
     }
     progress {
       width: 100%;
@@ -752,6 +816,55 @@ const char WEB_UI_HTML[] PROGMEM = R"rawliteral(<!DOCTYPE html>
           </div>
         </div>
 
+        <div class="field">
+          <span class="field-label">Compass Orientation</span>
+          <span id="compass-hint" class="hint">Drag the compass dial so the direction you face at your desk points to the top of the screen (e.g. E at top = 90&deg;).</span>
+          <div class="compass-panel">
+            <div id="compass-dial" class="compass-dial" role="slider" tabindex="0"
+              aria-label="Compass orientation dial. Drag or use arrow keys to rotate."
+              aria-describedby="compass-hint"
+              aria-valuemin="0" aria-valuemax="359" aria-valuenow="0" aria-valuetext="0 degrees, North">
+              <svg viewBox="0 0 160 160" aria-hidden="true">
+                <polygon points="80,2 74,13 86,13" fill="var(--accent)"/>
+                <circle cx="80" cy="80" r="64" fill="none" stroke="var(--border)" stroke-width="1.5"/>
+                <circle cx="80" cy="80" r="38" fill="none" stroke="var(--border)" stroke-width="1" stroke-dasharray="3 3" opacity="0.7"/>
+                <g id="compass-rose">
+                  <line x1="125.25" y1="34.75" x2="120.3" y2="39.7" stroke="var(--muted)" stroke-width="1.5"/>
+                  <line x1="125.25" y1="125.25" x2="120.3" y2="120.3" stroke="var(--muted)" stroke-width="1.5"/>
+                  <line x1="34.75" y1="125.25" x2="39.7" y2="120.3" stroke="var(--muted)" stroke-width="1.5"/>
+                  <line x1="34.75" y1="34.75" x2="39.7" y2="39.7" stroke="var(--muted)" stroke-width="1.5"/>
+                  <line x1="80" y1="16" x2="80" y2="25" stroke="var(--danger)" stroke-width="2.5"/>
+                  <line x1="144" y1="80" x2="135" y2="80" stroke="var(--muted)" stroke-width="2"/>
+                  <line x1="80" y1="144" x2="80" y2="135" stroke="var(--muted)" stroke-width="2"/>
+                  <line x1="16" y1="80" x2="25" y2="80" stroke="var(--muted)" stroke-width="2"/>
+                  <text id="cmp-lbl-n" x="80" y="38" text-anchor="middle" dominant-baseline="central" fill="var(--danger)" font-size="15" font-weight="700">N</text>
+                  <text id="cmp-lbl-e" x="122" y="80" text-anchor="middle" dominant-baseline="central" fill="var(--text)" font-size="14" font-weight="600">E</text>
+                  <text id="cmp-lbl-s" x="80" y="122" text-anchor="middle" dominant-baseline="central" fill="var(--text)" font-size="14" font-weight="600">S</text>
+                  <text id="cmp-lbl-w" x="38" y="80" text-anchor="middle" dominant-baseline="central" fill="var(--text)" font-size="14" font-weight="600">W</text>
+                </g>
+                <text id="compass-readout-deg" x="80" y="74" text-anchor="middle" dominant-baseline="central" fill="var(--text)" font-size="17" font-weight="700">0&deg;</text>
+                <text id="compass-readout-dir" x="80" y="92" text-anchor="middle" dominant-baseline="central" fill="var(--accent)" font-size="12" font-weight="600">N UP</text>
+              </svg>
+            </div>
+            <div class="compass-controls">
+              <div class="offset-coord">
+                <label for="compassHeadingDeg">Top of Display (&deg;)</label>
+                <input type="number" id="compassHeadingDeg" name="compassHeadingDeg" min="0" max="359" step="1" value="0" required
+                  aria-describedby="compass-hint" data-error="compass-error">
+              </div>
+              <div class="compass-presets" role="group" aria-label="Quick compass presets">
+                <button type="button" data-compass="0" aria-pressed="true">N</button>
+                <button type="button" data-compass="90" aria-pressed="false">E</button>
+                <button type="button" data-compass="180" aria-pressed="false">S</button>
+                <button type="button" data-compass="270" aria-pressed="false">W</button>
+              </div>
+            </div>
+          </div>
+          <div id="compass-error" class="error-msg">
+            <span role="img" aria-label="Error">&#10060;</span> Enter a heading between 0 and 359 degrees.
+          </div>
+        </div>
+
         <div class="check-row">
           <input type="checkbox" id="use24Hour" name="use24Hour" value="true">
           <label for="use24Hour">Use 24-hour clock format</label>
@@ -1052,7 +1165,7 @@ const char WEB_UI_HTML[] PROGMEM = R"rawliteral(<!DOCTYPE html>
     // Unsaved-changes tracking for floating Save / Cancel bar
     const trackedTextFields = [
       'wifiSsid', 'wifiPass', 'wifiTxPowerDbm', 'latitude', 'longitude',
-      'timezone', 'brightness', 'displayOffsetX', 'displayOffsetY',
+      'timezone', 'brightness', 'displayOffsetX', 'displayOffsetY', 'compassHeadingDeg',
       'searchRadiusKm', 'flightPollSec',
       'maxAltitudeFt', 'flightSource', 'quietStartHour', 'quietEndHour'
     ];
@@ -1110,6 +1223,7 @@ const char WEB_UI_HTML[] PROGMEM = R"rawliteral(<!DOCTYPE html>
       document.getElementById('tzPreset').value = '';
       syncTxPowerSlider();
       previewDisplayOffset();
+      syncCompassVisual(compassInput.value, false);
       updateDirtyState();
       showBanner('Changes discarded.', true);
     });
@@ -1155,6 +1269,118 @@ const char WEB_UI_HTML[] PROGMEM = R"rawliteral(<!DOCTYPE html>
         if (el.validity.valid) previewDisplayOffset();
       });
     });
+
+    // Draggable compass orientation dial
+    const compassDial = document.getElementById('compass-dial');
+    const compassRose = document.getElementById('compass-rose');
+    const compassInput = document.getElementById('compassHeadingDeg');
+    const compassReadoutDeg = document.getElementById('compass-readout-deg');
+    const compassReadoutDir = document.getElementById('compass-readout-dir');
+    const compassPresetBtns = Array.from(document.querySelectorAll('.compass-presets button[data-compass]'));
+    const compassLabels = [
+      { el: document.getElementById('cmp-lbl-n'), x: 80, y: 38 },
+      { el: document.getElementById('cmp-lbl-e'), x: 122, y: 80 },
+      { el: document.getElementById('cmp-lbl-s'), x: 80, y: 122 },
+      { el: document.getElementById('cmp-lbl-w'), x: 38, y: 80 }
+    ];
+    const compassShortDirs = ['N', 'NE', 'E', 'SE', 'S', 'SW', 'W', 'NW'];
+    const compassFullDirs = ['North', 'Northeast', 'East', 'Southeast', 'South', 'Southwest', 'West', 'Northwest'];
+    const normalizeDeg = (v) => ((Math.round(Number(v) || 0) % 360) + 360) % 360;
+
+    let compassAnnounceTimer = null;
+    function syncCompassVisual(deg, announce = false) {
+      const norm = normalizeDeg(deg);
+      const dirIdx = Math.round(norm / 45) % 8;
+      const shortDir = compassShortDirs[dirIdx];
+      const fullDir = compassFullDirs[dirIdx];
+      compassRose.setAttribute('transform', `rotate(${-norm} 80 80)`);
+      compassLabels.forEach(({ el, x, y }) => {
+        el.setAttribute('transform', `rotate(${norm} ${x} ${y})`);
+      });
+      compassReadoutDeg.textContent = `${norm}\u00b0`;
+      compassReadoutDir.textContent = `${shortDir} UP`;
+      compassDial.setAttribute('aria-valuenow', String(norm));
+      compassDial.setAttribute('aria-valuetext', `${norm} degrees, ${fullDir}`);
+      compassPresetBtns.forEach((btn) => {
+        btn.setAttribute('aria-pressed', String(Number(btn.dataset.compass) === norm));
+      });
+      if (announce) {
+        clearTimeout(compassAnnounceTimer);
+        compassAnnounceTimer = setTimeout(() => {
+          announcer.textContent = `Compass top set to ${fullDir}, ${norm} degrees`;
+        }, 250);
+      }
+    }
+
+    function setCompassHeading(deg, announce = false) {
+      const norm = normalizeDeg(deg);
+      compassInput.value = String(norm);
+      syncAria(compassInput, false);
+      syncCompassVisual(norm, announce);
+      updateDirtyState();
+    }
+
+    let compassDragStartAngle = 0;
+    let compassDragStartHeading = 0;
+    const pointerAngleDeg = (ev) => {
+      const rect = compassDial.getBoundingClientRect();
+      const cx = rect.left + rect.width / 2;
+      const cy = rect.top + rect.height / 2;
+      return Math.atan2(ev.clientX - cx, -(ev.clientY - cy)) * (180 / Math.PI);
+    };
+
+    compassDial.addEventListener('pointerdown', (ev) => {
+      if (ev.button !== 0) return;
+      compassDragStartAngle = pointerAngleDeg(ev);
+      compassDragStartHeading = normalizeDeg(compassInput.value);
+      compassDial.setPointerCapture(ev.pointerId);
+      compassDial.classList.add('dragging');
+    });
+
+    compassDial.addEventListener('pointermove', (ev) => {
+      if (!compassDial.hasPointerCapture(ev.pointerId)) return;
+      const delta = pointerAngleDeg(ev) - compassDragStartAngle;
+      setCompassHeading(compassDragStartHeading - delta, false);
+    });
+
+    compassDial.addEventListener('lostpointercapture', () => {
+      compassDial.classList.remove('dragging');
+      syncCompassVisual(compassInput.value, true);
+    });
+
+    compassDial.addEventListener('keydown', (ev) => {
+      const step = ev.shiftKey ? 1 : 5;
+      const cur = normalizeDeg(compassInput.value);
+      if (ev.key === 'ArrowRight' || ev.key === 'ArrowUp') {
+        ev.preventDefault();
+        setCompassHeading(cur + step, true);
+      } else if (ev.key === 'ArrowLeft' || ev.key === 'ArrowDown') {
+        ev.preventDefault();
+        setCompassHeading(cur - step, true);
+      } else if (ev.key === 'PageUp') {
+        ev.preventDefault();
+        setCompassHeading(cur + 45, true);
+      } else if (ev.key === 'PageDown') {
+        ev.preventDefault();
+        setCompassHeading(cur - 45, true);
+      } else if (ev.key === 'Home') {
+        ev.preventDefault();
+        setCompassHeading(0, true);
+      }
+    });
+
+    compassPresetBtns.forEach((btn) => {
+      btn.addEventListener('click', () => {
+        setCompassHeading(Number(btn.dataset.compass), true);
+      });
+    });
+
+    compassInput.addEventListener('input', () => {
+      if (compassInput.validity.valid) {
+        syncCompassVisual(compassInput.value, false);
+      }
+    });
+    syncCompassVisual(0, false);
 
     // Password toggle
     const passInput = document.getElementById('wifiPass');
@@ -1295,6 +1521,8 @@ const char WEB_UI_HTML[] PROGMEM = R"rawliteral(<!DOCTYPE html>
         document.getElementById('brightness').value = c.brightness ?? 220;
         offXInput.value = c.displayOffsetX ?? 0;
         offYInput.value = c.displayOffsetY ?? 0;
+        compassInput.value = c.compassHeadingDeg ?? 0;
+        syncCompassVisual(compassInput.value, false);
         document.getElementById('use24Hour').checked = !!c.use24Hour;
         document.getElementById('useFahrenheit').checked = !!c.useFahrenheit;
         document.getElementById('useImperialDist').checked = !!c.useImperialDist;

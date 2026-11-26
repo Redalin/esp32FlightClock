@@ -513,7 +513,7 @@ void setup() {
   }
 
   Storage::load(cfg);
-  Log::printf("[Cfg] SSID=\"%s\" txPwr=%.1fdBm GPS=%s (%.4f, %.4f) TZ=%s offset=(%d,%d)\n",
+  Log::printf("[Cfg] SSID=\"%s\" txPwr=%.1fdBm GPS=%s (%.4f, %.4f) TZ=%s offset=(%d,%d) compass=%u\n",
               cfg.wifiSsid.c_str(),
               cfg.wifiTxPowerDbm,
               cfg.locationConfigured ? "yes" : "no",
@@ -521,7 +521,8 @@ void setup() {
               cfg.longitude,
               cfg.timezone.c_str(),
               static_cast<int>(cfg.displayOffsetX),
-              static_cast<int>(cfg.displayOffsetY));
+              static_cast<int>(cfg.displayOffsetY),
+              static_cast<unsigned>(cfg.compassHeadingDeg));
 
   Display::init(cfg.brightness);
   Display::setOffset(cfg.displayOffsetX, cfg.displayOffsetY);

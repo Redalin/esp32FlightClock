@@ -64,6 +64,7 @@ void handleGetConfig() {
   doc["brightness"] = gCfg->brightness;
   doc["displayOffsetX"] = gCfg->displayOffsetX;
   doc["displayOffsetY"] = gCfg->displayOffsetY;
+  doc["compassHeadingDeg"] = gCfg->compassHeadingDeg;
   doc["searchRadiusKm"] = gCfg->searchRadiusKm;
   doc["flightPollSec"] = gCfg->flightPollSec;
   doc["maxAltitudeFt"] = gCfg->maxAltitudeFt;
@@ -136,6 +137,10 @@ void handlePostConfig() {
     gCfg->displayOffsetY = clampDisplayOffset(server.arg("displayOffsetY").toInt());
   }
   Display::setOffset(gCfg->displayOffsetX, gCfg->displayOffsetY);
+
+  if (server.hasArg("compassHeadingDeg")) {
+    gCfg->compassHeadingDeg = normalizeCompassHeading(server.arg("compassHeadingDeg").toInt());
+  }
 
   float rad = server.arg("searchRadiusKm").toFloat();
   if (rad >= 1.0f && rad <= 150.0f) {
