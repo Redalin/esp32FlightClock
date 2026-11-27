@@ -6,6 +6,8 @@ A compact round-screen widget for the **ESP32-C3 Super Mini** paired with a **1.
 - **Overhead Flight Radar**: Automatically switches to a flight HUD whenever an aircraft enters your configured radius (default 5 km), using **airplanes.live** / **adsb.lol** with automatic fallback and `429`/`403` backoff. Shows callsign, rotated aircraft icon, type, registration, altitude with climb/descent indicator, ground speed, distance, route, and a bearing blip on the outer radar ring. Polls at your configured interval when idle (default 30s), speeds up to 5s while tracking an aircraft, and supports configurable **quiet hours** (default 1:00 AM–6:00 AM) to conserve API quota.
 - **Web Configuration Portal**: Captive portal on first boot (`ESP32-FlightClock`) and always-on web UI in STA mode (`http://flightclock.local` or device IP) to configure Wi-Fi, GPS coordinates, timezone, units, brightness, radar radius/polling, and quiet hours.
 
+> **New to ESP32?** See the step-by-step [First-Time User Guide](FIRST_TIME_USERS.md) for wiring, installing VS Code + PlatformIO (or flashing from the terminal), bootloader mode, and initial Wi-Fi setup.
+
 ---
 
 ## Wiring (ESP32-C3 Super Mini ↔ 1.28" GC9A01 240×240 TFT)
