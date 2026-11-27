@@ -46,11 +46,18 @@ def run_esptool_merge(
 ) -> None:
     esptool_candidates = [
         os.path.join(pio_home, "packages", "tool-esptoolpy", "esptool.py"),
+        os.path.join(pio_home, "packages", "tool-esptoolpy", "esptool"),
     ]
-    esptool_script = next((p for p in esptool_candidates if os.path.isfile(p)), None)
+    esptool_bin = next((p for p in esptool_candidates if os.path.isfile(p)), None)
 
-    if esptool_script:
-        cmd = [sys.executable, esptool_script]
+    if esptool_bin and esptool_bin.endswith(".py"):
+        cmd = [sys.executable, esptool_bin]
+    elif esptool_bin:
+        cmd = [esptool_bin]
+    elif shutil.which("esptool.py"):
+        cmd = [shutil.which("esptool.py")]
+    elif shutil.which("esptool"):
+        cmd = [shutil.which("esptool")]
     else:
         cmd = [sys.executable, "-m", "esptool"]
 
