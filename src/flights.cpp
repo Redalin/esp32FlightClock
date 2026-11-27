@@ -1,6 +1,7 @@
 #include "flights.h"
 #include "logger.h"
 #include <ArduinoJson.h>
+#include <Client.h>
 #include <HTTPClient.h>
 #include <Preferences.h>
 #include <WiFiClientSecure.h>
@@ -94,7 +95,7 @@ void recordFailure(HostBackoff& b, int httpCode, const char* host, unsigned long
 // so ArduinoJson can parse directly off the socket while keeping Keep-Alive aligned.
 class HttpBodyStream : public Stream {
 public:
-  HttpBodyStream(WiFiClient& client, int contentLength, uint32_t timeoutMs = 5000)
+  HttpBodyStream(Client& client, int contentLength, uint32_t timeoutMs = 5000)
       : _client(client),
         _chunked(contentLength < 0),
         _remaining(contentLength >= 0 ? static_cast<size_t>(contentLength) : 0),
@@ -289,7 +290,7 @@ private:
     return true;
   }
 
-  WiFiClient& _client;
+  Client& _client;
   bool _chunked;
   size_t _remaining;
   size_t _chunkRemaining = 0;

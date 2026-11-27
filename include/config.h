@@ -4,6 +4,7 @@
 #include <Arduino.h>
 #include <esp_wifi.h>
 #include <math.h>
+#include "config_utils.h"
 
 // Firmware release version (bump for every release; also appended to the compiled .bin filename)
 #define FW_VERSION "1.0.9"
@@ -68,26 +69,8 @@ struct AppConfig {
   uint8_t quietEndHour = 6;         // 0..23 (local time)
 };
 
-inline float clampWifiTxPowerDbm(float dbm) {
-  if (isnan(dbm) || dbm < 5.0f) return 5.0f;
-  if (dbm > 20.0f) return 20.0f;
-  return roundf(dbm * 2.0f) / 2.0f;
-}
-
 inline void applyWifiTxPower(float dbm) {
   float clamped = clampWifiTxPowerDbm(dbm);
   int8_t quarterDbm = static_cast<int8_t>(lroundf(clamped * 4.0f));
   esp_wifi_set_max_tx_power(quarterDbm);
-}
-
-inline int8_t clampDisplayOffset(int val) {
-  if (val < -30) return -30;
-  if (val > 30) return 30;
-  return static_cast<int8_t>(val);
-}
-
-inline uint16_t normalizeCompassHeading(int val) {
-  int m = val % 360;
-  if (m < 0) m += 360;
-  return static_cast<uint16_t>(m);
 }

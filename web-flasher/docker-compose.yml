@@ -1,0 +1,14 @@
+services:
+  flightclock-flasher:
+    build: .
+    container_name: flightclock-web-flasher
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    environment:
+      GITHUB_REPO: ${GITHUB_REPO:-Redalin/esp32FlightClock}
+      DEFAULT_BRANCH: ${DEFAULT_BRANCH:-main}
+      CACHE_TTL_SECONDS: ${CACHE_TTL_SECONDS:-300}
+      APP_TITLE: ${APP_TITLE:-ESP32-C3 Flight Clock}
+      # Optional: add a read-only GitHub PAT to increase API rate limit from 60/hr to 5000/hr
+      GITHUB_TOKEN: ${GITHUB_TOKEN:-}

@@ -1,0 +1,141 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="color-scheme" content="light dark" />
+    <title>ESP32-C3 Flight Clock — Web Flasher</title>
+    <link rel="stylesheet" href="/styles.css" />
+    <script
+      type="module"
+      src="https://unpkg.com/esp-web-tools@10/dist/web/install-button.js?module"
+    ></script>
+  </head>
+  <body>
+    <main class="shell">
+      <header class="hero">
+        <div class="hero-brand">
+          <div class="radar-badge" aria-hidden="true">
+            <svg viewBox="0 0 36 36" width="32" height="32" fill="none">
+              <circle cx="18" cy="18" r="15" stroke="currentColor" stroke-width="2" opacity="0.35" />
+              <circle cx="18" cy="18" r="9" stroke="currentColor" stroke-width="1.5" opacity="0.5" />
+              <path d="M18 3v4M18 29v4M3 18h4M29 18h4" stroke="currentColor" stroke-width="1.5" />
+              <path
+                d="M18 11l3 9-3-2-3 2 3-9z"
+                fill="currentColor"
+              />
+            </svg>
+          </div>
+          <div>
+            <h1 id="app-title">ESP32-C3 Flight Clock</h1>
+            <p class="subtitle">USB Browser Firmware Flasher &amp; Release Browser</p>
+          </div>
+        </div>
+        <div class="hero-actions">
+          <a id="repo-link" class="ghost-btn" href="https://github.com/Redalin/esp32FlightClock" target="_blank" rel="noopener noreferrer">
+            GitHub Repo
+          </a>
+          <button id="refresh-btn" class="ghost-btn" type="button">Refresh</button>
+        </div>
+      </header>
+
+      <div id="compat-banner" class="banner banner-warn" role="alert" hidden></div>
+      <div id="error-banner" class="banner banner-error" role="alert" hidden></div>
+
+      <section class="card" aria-labelledby="select-heading">
+        <div class="card-header">
+          <h2 id="select-heading">1. Select Firmware</h2>
+          <span id="sync-status" class="muted">Loading releases from GitHub…</span>
+        </div>
+
+        <div class="controls-grid">
+          <div class="field">
+            <label for="branch-select">Branch</label>
+            <select id="branch-select" disabled>
+              <option value="">Loading…</option>
+            </select>
+          </div>
+
+          <div class="field">
+            <label for="version-select">Version</label>
+            <select id="version-select" disabled>
+              <option value="">Select a branch first</option>
+            </select>
+          </div>
+        </div>
+
+        <div id="release-meta" class="meta-strip" hidden>
+          <span id="meta-badge" class="pill"></span>
+          <span id="meta-date" class="muted"></span>
+          <span id="meta-size" class="muted"></span>
+          <a id="meta-github-link" class="meta-link" href="#" target="_blank" rel="noopener noreferrer">
+            View on GitHub ↗
+          </a>
+        </div>
+      </section>
+
+      <section class="card" aria-labelledby="flash-heading">
+        <div class="card-header">
+          <h2 id="flash-heading">2. Flash via USB</h2>
+          <span class="muted">ESP32-C3 Super Mini</span>
+        </div>
+
+        <p class="flash-hint">
+          Connect your ESP32-C3 Super Mini with a data-capable USB-C cable, then click
+          <strong>Install Firmware</strong>. Choose the serial port in the browser prompt.
+        </p>
+
+        <div class="flash-actions">
+          <esp-web-install-button id="install-btn">
+            <button slot="activate" class="primary-btn" id="install-activate" type="button" disabled>
+              Install Firmware via USB
+            </button>
+            <span slot="unsupported" class="muted">
+              Web Serial is not supported in this browser. Use Chrome, Edge, or Opera over HTTPS.
+            </span>
+            <span slot="not-allowed" class="muted">
+              USB flashing requires HTTPS (or localhost).
+            </span>
+          </esp-web-install-button>
+
+          <div class="secondary-downloads" id="download-links" hidden>
+            <a id="ota-download" class="ghost-btn" href="#" hidden>Download OTA (.bin)</a>
+            <a id="factory-download" class="ghost-btn" href="#" hidden>Download Factory (.bin)</a>
+          </div>
+        </div>
+      </section>
+
+      <section class="card" aria-labelledby="notes-heading">
+        <div class="card-header">
+          <h2 id="notes-heading">Release Notes</h2>
+          <span id="notes-version" class="muted"></span>
+        </div>
+        <div id="release-notes" class="release-notes">
+          <p class="muted">Select a version to view its release notes.</p>
+        </div>
+      </section>
+
+      <details class="card help-card">
+        <summary>Troubleshooting &amp; First-Time Setup</summary>
+        <div class="help-body">
+          <h3>Putting a brand-new ESP32-C3 into Bootloader Mode</h3>
+          <ol>
+            <li><strong>Hold</strong> the <code>BOOT</code> button on the ESP32-C3 Super Mini.</li>
+            <li>While holding <code>BOOT</code>, <strong>tap</strong> <code>RST</code> (or plug in the USB-C cable).</li>
+            <li><strong>Release</strong> <code>BOOT</code>, then click <strong>Install Firmware via USB</strong>.</li>
+            <li>Once flashing completes, tap <code>RST</code> once to boot into Setup Mode.</li>
+          </ol>
+
+          <h3>First-Time Wi-Fi Setup</h3>
+          <ol>
+            <li>Connect your phone or computer to the <code>ESP32-FlightClock</code> Wi-Fi network.</li>
+            <li>Open <code>http://192.168.4.1</code> if the captive portal does not open automatically.</li>
+            <li>Enter your 2.4 GHz Wi-Fi credentials, GPS coordinates, and timezone, then click <strong>Save &amp; Apply</strong>.</li>
+          </ol>
+        </div>
+      </details>
+    </main>
+
+    <script type="module" src="/app.js"></script>
+  </body>
+</html>
