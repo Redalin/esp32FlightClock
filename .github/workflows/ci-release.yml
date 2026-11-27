@@ -1,0 +1,146 @@
+name: Build, Test & Release Firmware
+
+on:
+  push:
+    branches:
+      - main
+      - beta
+      - dev
+  pull_request:
+    branches:
+      - main
+      - beta
+      - dev
+  workflow_dispatch:
+
+concurrency:
+  group: firmware-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  test-and-build:
+    name: Test & Build Firmware
+    runs-on: ubuntu-latest
+    outputs:
+      fw_version: ${{ steps.meta.outputs.fw_version }}
+      release_tag: ${{ steps.meta.outputs.release_tag }}
+      is_prerelease: ${{ steps.meta.outputs.is_prerelease }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Set up Node.js (for web flasher tests)
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Cache PlatformIO
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/pip
+            ~/.platformio
+          key: ${{ runner.os }}-pio-${{ hashFiles('platformio.ini') }}
+          restore-keys: |
+            ${{ runner.os }}-pio-
+
+      - name: Install PlatformIO
+        run: pip install --upgrade platformio
+
+      - name: Run native C++ unit tests
+        run: pio test -e native -v
+
+      - name: Run web flasher unit tests
+        run: node --test web-flasher/server.test.mjs
+
+      - name: Determine firmware version and release tag
+        id: meta
+        shell: bash
+        run: |
+          FW_VERSION=$(python3 -c 'import re; m=re.search(r"#define\s+FW_VERSION\s+\"([^\"]+)\"", open("include/config.h").read()); print(m.group(1).strip())')
+          SHORT_SHA="${GITHUB_SHA::7}"
+          BRANCH="${GITHUB_REF_NAME}"
+          IS_PRERELEASE="true"
+
+          if [[ "$GITHUB_EVENT_NAME" == "pull_request" ]]; then
+            RELEASE_TAG="v${FW_VERSION}-pr.${{ github.event.pull_request.number }}.${SHORT_SHA}"
+          elif [[ "$BRANCH" == "main" ]]; then
+            if git rev-parse -q --verify "refs/tags/v${FW_VERSION}" >/dev/null; then
+              RELEASE_TAG="v${FW_VERSION}-main.${GITHUB_RUN_NUMBER}.${SHORT_SHA}"
+              IS_PRERELEASE="true"
+            else
+              RELEASE_TAG="v${FW_VERSION}"
+              IS_PRERELEASE="false"
+            fi
+          else
+            SAFE_BRANCH=$(echo "$BRANCH" | tr -cs 'A-Za-z0-9.-' '-')
+            RELEASE_TAG="v${FW_VERSION}-${SAFE_BRANCH}.${GITHUB_RUN_NUMBER}.${SHORT_SHA}"
+            IS_PRERELEASE="true"
+          fi
+
+          echo "fw_version=${FW_VERSION}" >> "$GITHUB_OUTPUT"
+          echo "release_tag=${RELEASE_TAG}" >> "$GITHUB_OUTPUT"
+          echo "is_prerelease=${IS_PRERELEASE}" >> "$GITHUB_OUTPUT"
+          echo "Resolved FW_VERSION=${FW_VERSION}, RELEASE_TAG=${RELEASE_TAG}, IS_PRERELEASE=${IS_PRERELEASE}"
+
+      - name: Build ESP32-C3 firmware
+        run: pio run -e esp32-c3-supermini
+
+      - name: Package OTA and merged factory firmware
+        run: |
+          python3 scripts/merge_firmware.py \
+            --env esp32-c3-supermini \
+            --version "${{ steps.meta.outputs.release_tag }}" \
+            --out-dir dist
+
+      - name: Upload firmware artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: flightclock-${{ steps.meta.outputs.release_tag }}
+          path: dist/
+          retention-days: 14
+
+  release:
+    name: Publish Versioned GitHub Release
+    needs: test-and-build
+    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Download firmware artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: flightclock-${{ needs.test-and-build.outputs.release_tag }}
+          path: dist
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ needs.test-and-build.outputs.release_tag }}
+          BRANCH: ${{ github.ref_name }}
+          IS_PRERELEASE: ${{ needs.test-and-build.outputs.is_prerelease }}
+        run: |
+          FLAGS=(--target "$BRANCH" --title "Flight Clock $TAG" --generate-notes)
+          if [[ "$IS_PRERELEASE" == "true" ]]; then
+            FLAGS+=(--prerelease)
+          fi
+
+          gh release create "$TAG" \
+            dist/flightclock-*-factory.bin \
+            dist/flightclock-*-ota.bin \
+            dist/manifest.json \
+            dist/SHA256SUMS.txt \
+            "${FLAGS[@]}"
